@@ -1,0 +1,13 @@
+# ignore python cache
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# ignore VMEC and large files generated during optimization
+*.nc
+simsopt_*.dat
+wout_*.txt
+input.squid_*
+
+# ignore old code reference
+old_archive/

@@ -50,7 +50,7 @@ def main():
                         help="Initial VMEC wout .nc file")
     parser.add_argument("--maxiter", type=int, default=10)
     parser.add_argument("--aspect_target", type=float, default=None)
-    parser.add_argument("--max_dofs", type=int, default=6)
+    parser.add_argument("--max_dofs", type=int, default=15)
     parser.add_argument("--num_alpha", type=int, default=4)
     parser.add_argument("--num_pitch", type=int, default=20)
     parser.add_argument("--num_surfaces", type=int, default=3)
@@ -62,15 +62,24 @@ def main():
     parser.add_argument("--w_mirror", type=float, default=500.0)
     parser.add_argument("--w_iota", type=float, default=200.0)
     parser.add_argument("--w_grad_s", type=float, default=1.0)
-    parser.add_argument("--w_reg", type=float, default=1000.0)
+    parser.add_argument("--w_reg", type=float, default=10.0)
 
     parser.add_argument("--grad_s_smin", type=float, default=0.1)
     parser.add_argument("--grad_s_smax", type=float, default=0.5)
     parser.add_argument("--grad_s_ns", type=int, default=3)
 
     parser.add_argument("--mirror_target", type=float, default=0.20)
+    parser.add_argument("--mirror_max", type=float, default=None,
+                        help="Upper mirror bound; if unset, penalty is symmetric around target")
     parser.add_argument("--iota_ax", type=float, default=None)
     parser.add_argument("--iota_edge", type=float, default=None)
+
+    parser.add_argument("--abs_step", type=float, default=1e-4,
+                        help="Absolute FD step for Jacobian (simsopt default 1e-7)")
+    parser.add_argument("--rel_step", type=float, default=0.0,
+                        help="Relative FD step for Jacobian")
+    parser.add_argument("--perturb", type=float, default=0.0,
+                        help="Random perturbation amplitude (fraction of |x|) to escape local minima")
 
     parser.add_argument("--backend", choices=["auto", "vmec", "desc"],
                         default="auto")

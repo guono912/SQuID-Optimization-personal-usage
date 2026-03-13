@@ -21,8 +21,14 @@ from ..objectives.itg_residual import ITGResidual
 from ..objectives.penalties import hinge_loss
 
 
-def wout_to_input(wout_path, input_path, ns=31):
-    """Convert wout_*.nc to VMEC input file."""
+def wout_to_input(wout_path, input_path, ns=31,
+                  prescribed_iota_ax=None, prescribed_iota_edge=None):
+    """Convert wout_*.nc to VMEC input file.
+
+    If prescribed_iota_ax / prescribed_iota_edge are given, the AI
+    coefficients are set to a simple linear profile instead of fitting
+    the iotaf from the wout file.
+    """
     ds = netCDF4.Dataset(wout_path, "r")
     nfp = int(ds.variables["nfp"][:])
     mpol = int(ds.variables["mpol"][:])
@@ -40,7 +46,11 @@ def wout_to_input(wout_path, input_path, ns=31):
     ds.close()
 
     s_full = np.linspace(0, 1, ns_w)
-    ai = np.polynomial.polynomial.polyfit(s_full, iotaf, min(10, ns_w - 1))
+    if prescribed_iota_ax is not None and prescribed_iota_edge is not None:
+        ai = np.array([prescribed_iota_ax,
+                       prescribed_iota_edge - prescribed_iota_ax])
+    else:
+        ai = np.polynomial.polynomial.polyfit(s_full, iotaf, min(10, ns_w - 1))
 
     p_max = presf.max()
     pn = presf / p_max if p_max > 0 else presf
@@ -80,8 +90,12 @@ def wout_to_input(wout_path, input_path, ns=31):
         f.write("/\n")
 
 
-def _compute_mirror_penalty(mirror_ratio, mirror_target):
-    return hinge_loss(mirror_target - mirror_ratio, 0.0)
+def _compute_mirror_penalty(mirror_ratio, mirror_target, mirror_max=None):
+    if mirror_max is not None:
+        pen_lo = hinge_loss(mirror_target - mirror_ratio, 0.0)
+        pen_hi = hinge_loss(mirror_ratio - mirror_max, 0.0)
+        return pen_lo + pen_hi
+    return (mirror_ratio - mirror_target) ** 2
 
 
 def _compute_iota_penalty(iota_axis, iota_edge, iota_ax_target, iota_edge_target):
@@ -162,7 +176,9 @@ def run_vmec(args):
         os.path.dirname(os.path.abspath(args.nc_file)), "input.squid_init"
     )
     print(f"  Converting wout -> {input_path} ...")
-    wout_to_input(args.nc_file, input_path, ns=args.ns_vmec)
+    wout_to_input(args.nc_file, input_path, ns=args.ns_vmec,
+                  prescribed_iota_ax=args.iota_ax,
+                  prescribed_iota_edge=args.iota_edge)
 
     vmec = Vmec(input_path)
     vmec.run()
@@ -176,7 +192,7 @@ def run_vmec(args):
     surf = vmec.boundary
     surf.fix_all()
     freed = []
-    for m in [1, 2, 3, 0]:
+    for m in [1, 0, 2, 3]:
         for n in [0, 1, -1, 2, -2]:
             if m == 0 and n == 0:
                 continue
@@ -271,7 +287,9 @@ def run_vmec(args):
 
         def mirror_penalty(self):
             self._compute()
-            return np.sqrt(_compute_mirror_penalty(self._mirror, args.mirror_target))
+            return np.sqrt(_compute_mirror_penalty(
+                self._mirror, args.mirror_target,
+                getattr(args, 'mirror_max', None)))
 
         def iota_penalty(self):
             self._compute()
@@ -307,10 +325,24 @@ def run_vmec(args):
     obj0 = prob.objective()
     print(f"  Initial objective = {obj0:.4e}")
 
+    # Random perturbation to escape local minima
+    perturb = getattr(args, 'perturb', 0.0)
+    if perturb > 0:
+        x_cur = np.array(vmec.x, dtype=float)
+        rng = np.random.default_rng()
+        scale = perturb * np.maximum(np.abs(x_cur), 1e-3)
+        vmec.x = x_cur + rng.normal(0, scale)
+        x0_vmec[:] = np.array(vmec.x, dtype=float)
+        print(f"\n  Applied random perturbation (amplitude={perturb})")
+
     max_nfev = args.maxiter * (n_dofs + 1)
-    print(f"\n  Starting optimisation (max_nfev={max_nfev}) ...")
+    abs_step = getattr(args, 'abs_step', 1e-4)
+    rel_step = getattr(args, 'rel_step', 0.0)
+    print(f"\n  Starting optimisation (max_nfev={max_nfev}, "
+          f"abs_step={abs_step:.0e}) ...")
     t_start = time.time()
-    least_squares_serial_solve(prob, max_nfev=max_nfev, grad=True)
+    least_squares_serial_solve(prob, max_nfev=max_nfev, grad=True,
+                               abs_step=abs_step, rel_step=rel_step)
     t_total = time.time() - t_start
 
     print(f"\n  Finished in {t_total / 60:.1f} min  ({squid._n} evals)")

@@ -121,6 +121,88 @@ def plot_squash_stretch(vmec, s_val=0.5, alpha=0.0, mpol=20, ntor=20):
     return fig
 
 
+def plot_J_contours(vmec, s_vals=None, alphas=None, lambda_N=0.3,
+                    num_pitch=50, mpol=8, ntor=8):
+    """
+    Polar contours of J̃_C at fixed normalised trapping depth λ_N.
+
+    Replicates PRX Energy (2024) Fig. 9 (Goodman et al.).
+    For a max-J configuration, contours should shrink outward.
+    """
+    import scipy.interpolate as spi
+
+    if s_vals is None:
+        s_vals = np.linspace(0.05, 0.95, 12)
+    if alphas is None:
+        alphas = np.linspace(0, 2 * np.pi, 16, endpoint=False)
+    s_vals = np.asarray(s_vals)
+    alphas = np.asarray(alphas)
+
+    _, surface_data = run_boozer(vmec, s_vals, mpol=mpol, ntor=ntor)
+    num_surfaces = len(s_vals)
+    num_alpha = len(alphas)
+    J_slice = np.zeros((num_surfaces, num_alpha))
+
+    for k in range(num_surfaces):
+        data = surface_data[k]
+        B_stars = np.linspace(data["B_min"], data["B_max"], num_pitch + 2)[1:-1]
+        B_star_k = data["B_min"] + lambda_N * (data["B_max"] - data["B_min"])
+        for a, alpha in enumerate(alphas):
+            zeta, B_I = _extract_field_line(data, alpha)
+            B_C = squash_and_stretch_simple(
+                zeta, B_I, data["B_min"], data["B_max"])
+            J_C = _compute_J_C(zeta, B_I, B_C, B_stars)
+            J_slice[k, a] = float(np.interp(B_star_k, B_stars, J_C))
+
+    # Axis constraint: at s → 0, J is independent of α
+    if s_vals[0] > 0.01:
+        s_plot = np.insert(s_vals, 0, 0.0)
+        J_axis = np.mean(J_slice[0, :])
+        J_plot = np.insert(J_slice, 0, np.full(num_alpha, J_axis), axis=0)
+    else:
+        s_plot = s_vals.copy()
+        J_plot = J_slice.copy()
+        J_plot[0, :] = np.mean(J_plot[0, :])
+
+    # Periodic padding in α for smooth spline
+    n_pad = 3
+    alphas_padded = np.concatenate([
+        alphas[-n_pad:] - 2 * np.pi, alphas, alphas[:n_pad] + 2 * np.pi,
+    ])
+    J_padded = np.column_stack([
+        J_plot[:, -n_pad:], J_plot, J_plot[:, :n_pad],
+    ])
+
+    spline = spi.RectBivariateSpline(s_plot, alphas_padded, J_padded)
+    s_fine = np.linspace(0.0, s_plot[-1], 200)
+    alpha_fine = np.linspace(0.0, 2 * np.pi, 360)
+    J_fine = spline(s_fine, alpha_fine)
+
+    R, Theta = np.meshgrid(s_fine, alpha_fine, indexing="ij")
+    fig, ax = plt.subplots(figsize=(7, 7), subplot_kw={"projection": "polar"})
+    ax.set_rmin(0)
+    cp = ax.contourf(Theta, R, J_fine, levels=30, cmap="inferno")
+    ax.contour(Theta, R, J_fine, levels=15, colors="white",
+               linewidths=0.5, alpha=0.6)
+    s_ticks = s_vals[s_vals > 0.05]
+    ax.set_rticks(s_ticks)
+    ax.set_yticklabels([f"{v:.1f}" for v in s_ticks], fontsize=7, color="gray")
+    ax.grid(True, alpha=0.25, color="gray", ls="--")
+    cbar = fig.colorbar(cp, ax=ax, shrink=0.7, pad=0.1,
+                        orientation="horizontal")
+    cbar.set_label(r"$\tilde{J}$", fontsize=14)
+    depth_pct = int(lambda_N * 100)
+    ax.set_title(
+        f"Contours of $\\tilde{{J}}$  —  "
+        f"{depth_pct}% most deeply trapped\n"
+        r"$(B^* \!-\! B_{\min})/(B_{\max} \!-\! B_{\min})"
+        f" = {lambda_N}$",
+        pad=20, fontsize=13,
+    )
+    plt.tight_layout()
+    return fig
+
+
 def plot_gradient_diagnostics(vmec, s_vals=None, num_alpha=8,
                               num_pitch=50, T_J=-0.06, mpol=8, ntor=8):
     """

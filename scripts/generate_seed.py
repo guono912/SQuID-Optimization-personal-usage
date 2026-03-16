@@ -91,7 +91,7 @@ def _from_analytic(args):
     print(f"    nfp={args.nfp}, R0={args.R0}, A={args.aspect}, "
           f"E={args.elongation}, Δ={args.mirror}")
     print(f"    iota: {args.iota_ax:.3f} → {args.iota_edge:.3f}")
-    print(f"\n  Next: run VMEC to get equilibrium, then diagnose andoptimize:")
+    print(f"\n  Next: run XVMEC to get equilibrium, then diagnose andoptimize:")
     print(f"    xvmec {args.output}")
 
 

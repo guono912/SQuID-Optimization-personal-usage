@@ -11,3 +11,27 @@ input.squid_*
 
 # ignore old code reference
 old_archive/
+
+# VMEC/SQuID 产生的临时文件
+fort.*
+log.*
+input.*
+wout_*.nc
+jxbout_*.nc
+threed1.*
+mercier.*
+
+# Python 缓存
+__pycache__/
+*.py[cod]
+*$py.class
+
+# 较大的二进制数据
+*.nc
+*.h5
+
+# Windows 系统产生的垃圾文件
+*:Zone.Identifier
+*Zone.Identifier
+$RECYCLE.BIN/
+Desktop.ini

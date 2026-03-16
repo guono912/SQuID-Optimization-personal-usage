@@ -102,6 +102,24 @@ def _compute_iota_penalty(iota_axis, iota_edge, iota_ax_target, iota_edge_target
     return (iota_axis - iota_ax_target) ** 2 + (iota_edge - iota_edge_target) ** 2
 
 
+def _compute_well_penalty(vmec_ro, target_well):
+    """Penalise magnetic hill (well_depth < target_well).
+
+    well_depth = (V'_axis - V'_edge) / V'_axis.
+    Positive → magnetic well (stable), negative → hill (unstable).
+    """
+    try:
+        vp = np.array(vmec_ro.wout.vp)
+        vp_axis = float(vp[1])
+        vp_edge = float(vp[-1])
+        if abs(vp_axis) < 1e-30:
+            return 0.0
+        well_depth = (vp_axis - vp_edge) / vp_axis
+        return hinge_loss(target_well - well_depth, 0.0)
+    except Exception:
+        return 0.0
+
+
 def _compute_f_grad_s(vmec_ro, s_targets, nu=80, nv=80):
     """Vacuum-proxy ITG target (dB/ds < 0)."""
     wout = vmec_ro.wout
@@ -237,6 +255,7 @@ def run_vmec(args):
             self._mirror = 0.0
             self._iota_ax = 0.0
             self._iota_ed = 0.0
+            self._well_depth = 0.0
             self._n = 0
             super().__init__(depends_on=[vmec])
 
@@ -270,12 +289,24 @@ def run_vmec(args):
             except Exception:
                 self._fgs = 0.0
 
+            try:
+                vp = np.array(vmec.wout.vp)
+                vp_ax = float(vp[1])
+                vp_ed = float(vp[-1])
+                self._well_depth = ((vp_ax - vp_ed) / vp_ax
+                                    if abs(vp_ax) > 1e-30 else 0.0)
+            except Exception:
+                self._well_depth = 0.0
+
             self._cache_x = cx
             dt = time.time() - t0
+            well_pct = self._well_depth * 100
+            well_tag = "well" if self._well_depth > 0 else "HILL"
             print(f"    [SQuID #{self._n}]  f_maxJ={self._fmaxj:.3e}  "
                   f"f_QI={self._fqi:.3e}  f_nabla_s={self._fgs:.3e}  "
                   f"delta={self._mirror:.4f}  "
-                  f"iota=[{self._iota_ax:.3f},{self._iota_ed:.3f}]  ({dt:.1f}s)")
+                  f"iota=[{self._iota_ax:.3f},{self._iota_ed:.3f}]  "
+                  f"well={well_pct:+.2f}%({well_tag})  ({dt:.1f}s)")
 
         def f_maxJ(self):
             self._compute()
@@ -301,13 +332,18 @@ def run_vmec(args):
             self._compute()
             return np.sqrt(max(self._fgs, 0.0))
 
+        def well_penalty(self):
+            self._compute()
+            return np.sqrt(_compute_well_penalty(
+                vmec, args.target_well))
+
         def reg_penalty(self):
             x_cur = np.array(vmec.x, dtype=float)
             return np.sqrt(float(np.sum((x_cur - x0_vmec) ** 2)))
 
     squid = SQuIDObjective()
 
-    prob = LeastSquaresProblem.from_tuples([
+    tuples = [
         (vmec.aspect, args.aspect_target, args.w_ar),
         (squid.f_maxJ, 0.0, args.w_maxj),
         (squid.f_QI, 0.0, args.w_qi),
@@ -315,11 +351,16 @@ def run_vmec(args):
         (squid.iota_penalty, 0.0, args.w_iota),
         (squid.grad_s_penalty, 0.0, args.w_grad_s),
         (squid.reg_penalty, 0.0, args.w_reg),
-    ])
+    ]
+    w_well = getattr(args, 'w_well', 0.0)
+    if w_well > 0:
+        tuples.append((squid.well_penalty, 0.0, w_well))
+    prob = LeastSquaresProblem.from_tuples(tuples)
 
     print(f"\n  Weights: w_AR={args.w_ar}, w_maxJ={args.w_maxj}, "
           f"w_QI={args.w_qi}, w_mirror={args.w_mirror}, "
-          f"w_iota={args.w_iota}, w_grad_s={args.w_grad_s}, w_reg={args.w_reg}")
+          f"w_iota={args.w_iota}, w_grad_s={args.w_grad_s}, "
+          f"w_reg={args.w_reg}, w_well={w_well}")
 
     print("\n  Evaluating initial state ...")
     obj0 = prob.objective()

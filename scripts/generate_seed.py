@@ -91,10 +91,8 @@ def _from_analytic(args):
     print(f"    nfp={args.nfp}, R0={args.R0}, A={args.aspect}, "
           f"E={args.elongation}, Δ={args.mirror}")
     print(f"    iota: {args.iota_ax:.3f} → {args.iota_edge:.3f}")
-    print(f"\n  Next: run VMEC to get equilibrium, then optimize:")
-    print(f"    vmec {args.output}")
-    print(f"    python scripts/optimize.py --nc_file wout_*.nc "
-          f"--iota_ax {args.iota_ax} --iota_edge {args.iota_edge}")
+    print(f"\n  Next: run XVMEC to get equilibrium, then diagnose andoptimize:")
+    print(f"    xvmec {args.output}")
 
 
 def _from_wout(args):

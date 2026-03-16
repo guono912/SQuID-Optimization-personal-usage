@@ -74,6 +74,11 @@ def main():
     parser.add_argument("--iota_ax", type=float, default=None)
     parser.add_argument("--iota_edge", type=float, default=None)
 
+    parser.add_argument("--w_well", type=float, default=0.0,
+                        help="Weight for magnetic well penalty (0 = disabled)")
+    parser.add_argument("--target_well", type=float, default=0.01,
+                        help="Target magnetic well depth (>0 means well); 0.01 = 1%%")
+
     parser.add_argument("--abs_step", type=float, default=1e-4,
                         help="Absolute FD step for Jacobian (simsopt default 1e-7)")
     parser.add_argument("--rel_step", type=float, default=0.0,

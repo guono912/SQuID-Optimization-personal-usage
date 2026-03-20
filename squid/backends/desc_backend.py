@@ -144,7 +144,7 @@ def run_desc(args):
     Z0 = surf.Z_lmn.copy()
 
     nR = len(free_idx_R)
-    x0 = np.concatenate([R0[free_idx_R], Z0[free_idx_Z]])
+    x0 = np.concatenate([R0[np.array(free_idx_R)], Z0[np.array(free_idx_Z)]])
 
     s_vals = np.linspace(0.2, 0.8, args.num_surfaces)
     alphas = np.linspace(0, 2 * np.pi, args.num_alpha, endpoint=False)
@@ -169,8 +169,8 @@ def run_desc(args):
 
         new_R = R0.copy()
         new_Z = Z0.copy()
-        new_R[free_idx_R] = x[:nR]
-        new_Z[free_idx_Z] = x[nR:]
+        new_R = new_R.at[np.array(free_idx_R)].set(x[:nR])
+        new_Z = new_Z.at[np.array(free_idx_Z)].set(x[nR:])
         surf.R_lmn = new_R
         surf.Z_lmn = new_Z
 

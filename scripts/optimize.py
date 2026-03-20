@@ -56,28 +56,40 @@ def main():
     parser.add_argument("--num_surfaces", type=int, default=3)
     parser.add_argument("--ns_vmec", type=int, default=31)
 
-    parser.add_argument("--w_qi", type=float, default=1.0)
-    parser.add_argument("--w_maxj", type=float, default=1.0)
-    parser.add_argument("--w_ar", type=float, default=100.0)
-    parser.add_argument("--w_mirror", type=float, default=500.0)
-    parser.add_argument("--w_iota", type=float, default=200.0)
-    parser.add_argument("--w_grad_s", type=float, default=1.0)
-    parser.add_argument("--w_reg", type=float, default=10.0)
+    # --- Core objectives (always active) ---
+    parser.add_argument("--w_qi", type=float, default=1.0,
+                        help="QI penalty weight [core, always on]")
+    parser.add_argument("--w_maxj", type=float, default=1.0,
+                        help="max-J penalty weight [core, always on]")
+    parser.add_argument("--w_ar", type=float, default=100.0,
+                        help="Aspect ratio penalty weight [core, always on]")
+    parser.add_argument("--w_reg", type=float, default=10.0,
+                        help="Regularisation weight [core, always on]")
 
+    # --- Optional objectives (off by default, 0 = disabled) ---
+    parser.add_argument("--w_mirror", type=float, default=0.0,
+                        help="Mirror ratio penalty weight (0 = disabled)")
+    parser.add_argument("--w_iota", type=float, default=0.0,
+                        help="Iota penalty weight (0 = disabled; useful with --free_iota)")
+    parser.add_argument("--w_grad_s", type=float, default=0.0,
+                        help="ITG grad-s penalty weight (0 = disabled)")
+    parser.add_argument("--w_well", type=float, default=0.0,
+                        help="Magnetic well penalty weight (0 = disabled)")
+
+    # --- Targets for optional objectives ---
+    parser.add_argument("--mirror_target", type=float, default=0.20,
+                        help="Target mirror ratio (only used when w_mirror > 0)")
+    parser.add_argument("--mirror_max", type=float, default=None,
+                        help="Upper mirror bound; if unset, penalty is symmetric around target")
+    parser.add_argument("--iota_ax", type=float, default=None,
+                        help="Axis iota: prescribes AI (NCURR=0) or soft target (--free_iota)")
+    parser.add_argument("--iota_edge", type=float, default=None,
+                        help="Edge iota: prescribes AI (NCURR=0) or soft target (--free_iota)")
+    parser.add_argument("--target_well", type=float, default=0.01,
+                        help="Target magnetic well depth (only used when w_well > 0)")
     parser.add_argument("--grad_s_smin", type=float, default=0.1)
     parser.add_argument("--grad_s_smax", type=float, default=0.5)
     parser.add_argument("--grad_s_ns", type=int, default=3)
-
-    parser.add_argument("--mirror_target", type=float, default=0.20)
-    parser.add_argument("--mirror_max", type=float, default=None,
-                        help="Upper mirror bound; if unset, penalty is symmetric around target")
-    parser.add_argument("--iota_ax", type=float, default=None)
-    parser.add_argument("--iota_edge", type=float, default=None)
-
-    parser.add_argument("--w_well", type=float, default=0.0,
-                        help="Weight for magnetic well penalty (0 = disabled)")
-    parser.add_argument("--target_well", type=float, default=0.01,
-                        help="Target magnetic well depth (>0 means well); 0.01 = 1%%")
 
     parser.add_argument("--abs_step", type=float, default=1e-4,
                         help="Absolute FD step for Jacobian (simsopt default 1e-7)")
@@ -85,6 +97,9 @@ def main():
                         help="Relative FD step for Jacobian")
     parser.add_argument("--perturb", type=float, default=0.0,
                         help="Random perturbation amplitude (fraction of |x|) to escape local minima")
+    parser.add_argument("--free_iota", action="store_true",
+                        help="Use NCURR=1: iota computed self-consistently from boundary shape. "
+                             "iota_ax/iota_edge become soft targets via penalty, not hard constraints.")
 
     parser.add_argument("--backend", choices=["auto", "vmec", "desc"],
                         default="auto")

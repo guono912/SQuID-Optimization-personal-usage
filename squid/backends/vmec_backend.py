@@ -22,12 +22,20 @@ from ..objectives.penalties import hinge_loss
 
 
 def wout_to_input(wout_path, input_path, ns=31,
-                  prescribed_iota_ax=None, prescribed_iota_edge=None):
+                  prescribed_iota_ax=None, prescribed_iota_edge=None,
+                  free_iota=False):
     """Convert wout_*.nc to VMEC input file.
 
-    If prescribed_iota_ax / prescribed_iota_edge are given, the AI
-    coefficients are set to a simple linear profile instead of fitting
-    the iotaf from the wout file.
+    Parameters
+    ----------
+    free_iota : bool
+        If True, use NCURR=1 with zero current so that the rotational
+        transform is computed self-consistently from the boundary shape.
+        The iota penalty in the optimizer then actively steers iota.
+        If False (default), use NCURR=0 with prescribed AI coefficients.
+    prescribed_iota_ax, prescribed_iota_edge : float or None
+        Only used when free_iota=False.  Sets a linear iota profile
+        instead of fitting the iotaf from the wout file.
     """
     ds = netCDF4.Dataset(wout_path, "r")
     nfp = int(ds.variables["nfp"][:])
@@ -46,11 +54,6 @@ def wout_to_input(wout_path, input_path, ns=31,
     ds.close()
 
     s_full = np.linspace(0, 1, ns_w)
-    if prescribed_iota_ax is not None and prescribed_iota_edge is not None:
-        ai = np.array([prescribed_iota_ax,
-                       prescribed_iota_edge - prescribed_iota_ax])
-    else:
-        ai = np.polynomial.polynomial.polyfit(s_full, iotaf, min(10, ns_w - 1))
 
     p_max = presf.max()
     pn = presf / p_max if p_max > 0 else presf
@@ -72,12 +75,27 @@ def wout_to_input(wout_path, input_path, ns=31,
         f.write("  DELT = 0.9\n  TCON0 = 1.0\n")
         f.write(f"  NFP = {nfp}\n  MPOL = {mpol}\n  NTOR = {ntor}\n")
         f.write(f"  NS_ARRAY = {ns}\n  NITER_ARRAY = 5000\n")
-        f.write("  NSTEP = 200\n  FTOL_ARRAY = 1.0E-12\n")
+        #f.write("  NSTEP = 200\n  FTOL_ARRAY = 1.0E-12\n")
+        f.write("  NSTEP = 200\n  FTOL_ARRAY = 1.0E-10\n")
         f.write(f"  PHIEDGE = {phiedge:.15e}\n")
-        f.write("  GAMMA = 0.0\n  LFREEB = F\n  NCURR = 0\n")
-        f.write("  PIOTA_TYPE = 'power_series'\n")
-        for i, c in enumerate(ai):
-            f.write(f"  AI({i}) = {c:.15e}\n")
+        f.write("  GAMMA = 0.0\n  LFREEB = F\n")
+
+        if free_iota:
+            f.write("  NCURR = 1\n")
+            f.write("  PCURR_TYPE = 'power_series'\n")
+            f.write("  AC(0) = 0.000000000000000e+00\n")
+        else:
+            f.write("  NCURR = 0\n")
+            f.write("  PIOTA_TYPE = 'power_series'\n")
+            if prescribed_iota_ax is not None and prescribed_iota_edge is not None:
+                ai = np.array([prescribed_iota_ax,
+                               prescribed_iota_edge - prescribed_iota_ax])
+            else:
+                ai = np.polynomial.polynomial.polyfit(
+                    s_full, iotaf, min(10, ns_w - 1))
+            for i, c in enumerate(ai):
+                f.write(f"  AI({i}) = {c:.15e}\n")
+
         f.write("  PMASS_TYPE = 'power_series'\n")
         f.write(f"  PRES_SCALE = {p_max:.15e}\n")
         for i, c in enumerate(am):
@@ -193,10 +211,14 @@ def run_vmec(args):
     input_path = os.path.join(
         os.path.dirname(os.path.abspath(args.nc_file)), "input.squid_init"
     )
+    free_iota = getattr(args, 'free_iota', False)
     print(f"  Converting wout -> {input_path} ...")
+    if free_iota:
+        print("  Mode: NCURR=1 (iota self-consistent with boundary)")
     wout_to_input(args.nc_file, input_path, ns=args.ns_vmec,
                   prescribed_iota_ax=args.iota_ax,
-                  prescribed_iota_edge=args.iota_edge)
+                  prescribed_iota_edge=args.iota_edge,
+                  free_iota=free_iota)
 
     vmec = Vmec(input_path)
     vmec.run()
@@ -284,29 +306,36 @@ def run_vmec(args):
             self._iota_ax = info["iota_axis"]
             self._iota_ed = info["iota_edge"]
 
-            try:
-                self._fgs = _compute_f_grad_s(vmec, s_grad)
-            except Exception:
-                self._fgs = 0.0
+            if getattr(args, 'w_grad_s', 0.0) > 0:
+                try:
+                    self._fgs = _compute_f_grad_s(vmec, s_grad)
+                except Exception:
+                    self._fgs = 0.0
 
-            try:
-                vp = np.array(vmec.wout.vp)
-                vp_ax = float(vp[1])
-                vp_ed = float(vp[-1])
-                self._well_depth = ((vp_ax - vp_ed) / vp_ax
-                                    if abs(vp_ax) > 1e-30 else 0.0)
-            except Exception:
-                self._well_depth = 0.0
+            if getattr(args, 'w_well', 0.0) > 0:
+                try:
+                    vp = np.array(vmec.wout.vp)
+                    vp_ax = float(vp[1])
+                    vp_ed = float(vp[-1])
+                    self._well_depth = ((vp_ax - vp_ed) / vp_ax
+                                        if abs(vp_ax) > 1e-30 else 0.0)
+                except Exception:
+                    self._well_depth = 0.0
 
             self._cache_x = cx
             dt = time.time() - t0
-            well_pct = self._well_depth * 100
-            well_tag = "well" if self._well_depth > 0 else "HILL"
-            print(f"    [SQuID #{self._n}]  f_maxJ={self._fmaxj:.3e}  "
-                  f"f_QI={self._fqi:.3e}  f_nabla_s={self._fgs:.3e}  "
-                  f"delta={self._mirror:.4f}  "
-                  f"iota=[{self._iota_ax:.3f},{self._iota_ed:.3f}]  "
-                  f"well={well_pct:+.2f}%({well_tag})  ({dt:.1f}s)")
+            parts = [f"f_QI={self._fqi:.3e}",
+                     f"f_maxJ={self._fmaxj:.3e}",
+                     f"delta={self._mirror:.4f}",
+                     f"iota=[{self._iota_ax:.3f},{self._iota_ed:.3f}]"]
+            if getattr(args, 'w_grad_s', 0.0) > 0:
+                parts.append(f"f_nabla_s={self._fgs:.3e}")
+            if getattr(args, 'w_well', 0.0) > 0:
+                well_pct = self._well_depth * 100
+                well_tag = "well" if self._well_depth > 0 else "HILL"
+                parts.append(f"well={well_pct:+.2f}%({well_tag})")
+            parts.append(f"({dt:.1f}s)")
+            print(f"    [SQuID #{self._n}]  {'  '.join(parts)}")
 
         def f_maxJ(self):
             self._compute()
@@ -343,24 +372,32 @@ def run_vmec(args):
 
     squid = SQuIDObjective()
 
+    # Core objectives (always active)
     tuples = [
-        (vmec.aspect, args.aspect_target, args.w_ar),
-        (squid.f_maxJ, 0.0, args.w_maxj),
         (squid.f_QI, 0.0, args.w_qi),
-        (squid.mirror_penalty, 0.0, args.w_mirror),
-        (squid.iota_penalty, 0.0, args.w_iota),
-        (squid.grad_s_penalty, 0.0, args.w_grad_s),
+        (squid.f_maxJ, 0.0, args.w_maxj),
+        (vmec.aspect, args.aspect_target, args.w_ar),
         (squid.reg_penalty, 0.0, args.w_reg),
     ]
-    w_well = getattr(args, 'w_well', 0.0)
-    if w_well > 0:
-        tuples.append((squid.well_penalty, 0.0, w_well))
+    active = [f"w_QI={args.w_qi}", f"w_maxJ={args.w_maxj}",
+              f"w_AR={args.w_ar}", f"w_reg={args.w_reg}"]
+
+    # Optional objectives (only added when weight > 0)
+    optional = [
+        (args.w_mirror, squid.mirror_penalty, "w_mirror"),
+        (args.w_iota, squid.iota_penalty, "w_iota"),
+        (getattr(args, 'w_grad_s', 0.0), squid.grad_s_penalty, "w_grad_s"),
+        (getattr(args, 'w_well', 0.0), squid.well_penalty, "w_well"),
+    ]
+    for w, func, name in optional:
+        if w > 0:
+            tuples.append((func, 0.0, w))
+            active.append(f"{name}={w}")
+
     prob = LeastSquaresProblem.from_tuples(tuples)
 
-    print(f"\n  Weights: w_AR={args.w_ar}, w_maxJ={args.w_maxj}, "
-          f"w_QI={args.w_qi}, w_mirror={args.w_mirror}, "
-          f"w_iota={args.w_iota}, w_grad_s={args.w_grad_s}, "
-          f"w_reg={args.w_reg}, w_well={w_well}")
+    print(f"\n  Active objectives ({len(tuples)}):")
+    print(f"    {', '.join(active)}")
 
     print("\n  Evaluating initial state ...")
     obj0 = prob.objective()

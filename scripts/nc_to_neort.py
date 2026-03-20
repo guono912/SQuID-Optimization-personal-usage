@@ -37,28 +37,14 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
     """
     Convert booz_xform netCDF to NEO-RT ASCII in_file.
 
-    Parameters
-    ----------
-    boozmn_path : str
-        Path to boozmn_*.nc from booz_xform / simsopt Boozer.
-    output_path : str
-        Output file (default ``in_file`` — the name NEO-RT expects).
-    s_values : array-like or None
-        Normalised flux values for each Boozer surface.
-        If None, computed from ``jlist`` and ``ns_b``.
-    ns_vmec : int or None
-        Override for VMEC radial grid size when computing s from jlist.
-    flux_override : float or None
-        Total toroidal flux [Tm²] from VMEC (``wout.phi[-1]``).
-        Required when ``phi_b`` in the netCDF is all zeros.
-    a_override : float or None
-        Minor radius [m] from VMEC (``wout.Aminor_p``).
-        Used when ``aspect_b`` is unavailable.
+    Writes the FULL Boozer spectrum (all m and n>=0 modes) so that
+    NEO-RT sees the complete 3D magnetic field.
 
     Returns
     -------
-    str or None
-        Output path on success, None on failure.
+    tuple (output_path, epsmn, m0, mph) on success, None on failure.
+        epsmn, m0, mph describe the dominant non-axisymmetric harmonic
+        for use in the NEO-RT namelist.
     """
     try:
         f = netcdf_file(boozmn_path, 'r', mmap=False)
@@ -72,19 +58,16 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
         mboz      = int(f.variables['mboz_b'][()])
         nboz      = int(f.variables['nboz_b'][()])
 
-        # Mode numbers — this booz_xform version uses ixm_b / ixn_b
         xm = np.asarray(f.variables['ixm_b'][:], dtype=int)
         xn = np.asarray(f.variables['ixn_b'][:], dtype=int)   # already ×nfp
 
-        # Harmonic data — shape (pack_rad, mn_modes), one row per surface
         bmnc_2d = np.asarray(f.variables['bmnc_b'][:])
         rmnc_2d = np.asarray(f.variables['rmnc_b'][:])
         zmns_2d = np.asarray(f.variables['zmns_b'][:])
-        pmns_2d = np.asarray(f.variables['pmns_b'][:])         # vmns
+        pmns_2d = np.asarray(f.variables['pmns_b'][:])
 
-        n_surfs = bmnc_2d.shape[0]   # actual number of computed surfaces
+        n_surfs = bmnc_2d.shape[0]
 
-        # Full-radial-grid arrays (length = ns_b = VMEC grid size)
         iota_full = np.asarray(f.variables['iota_b'][:])
         bvco_full = np.asarray(f.variables['bvco_b'][:])
         buco_full = np.asarray(f.variables['buco_b'][:])
@@ -94,7 +77,6 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
         phi_full  = (np.asarray(f.variables['phi_b'][:])
                      if 'phi_b'  in f.variables else np.zeros(ns_vmec_f))
 
-        # Stellarator-symmetric partners (zero if absent)
         has_bmns = 'bmns_b' in f.variables
         bmns_2d = np.asarray(f.variables['bmns_b'][:]) if has_bmns else np.zeros_like(bmnc_2d)
         has_rmns = 'rmns_b' in f.variables
@@ -107,7 +89,6 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
         jlist = (np.asarray(f.variables['jlist'][:], dtype=int)
                  if 'jlist' in f.variables else None)
 
-        # Aspect ratio for minor-radius estimate
         aspect = (float(f.variables['aspect_b'][()]) if 'aspect_b' in f.variables else 0.0)
     except KeyError as e:
         print(f"      [nc_to_neort] Missing variable in {boozmn_path}: {e}")
@@ -121,8 +102,6 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
     if s_values is not None:
         s_arr = np.asarray(s_values, dtype=float)
         if len(s_arr) != n_surfs:
-            print(f"      [nc_to_neort] Warning: len(s_values)={len(s_arr)}"
-                  f" != computed surfaces={n_surfs}; truncating/padding.")
             if len(s_arr) > n_surfs:
                 s_arr = s_arr[:n_surfs]
             else:
@@ -132,10 +111,8 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
         s_arr = (jlist - 1.0) / (ns_grid - 1.0)
     else:
         s_arr = np.linspace(0.05, 0.95, n_surfs)
-        print("      [nc_to_neort] Warning: s unknown; using linspace.")
 
     # ── Extract per-surface quantities from full radial arrays ───
-    # jlist stores 1-based VMEC surface indices; convert to 0-based
     if jlist is not None:
         jidx = np.clip(jlist - 1, 0, len(iota_full) - 1)
     else:
@@ -145,7 +122,6 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
     bvco_arr = bvco_full[jidx]
     buco_arr = buco_full[jidx]
     pres_arr = pres_full[jidx]
-    phi_arr  = phi_full[jidx]
 
     # ── Derived quantities (SI) ──────────────────────────────────
     Jpol_arr = bvco_arr * (2.0 * np.pi / MU0)
@@ -156,10 +132,8 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
     else:
         pprime_arr = np.zeros(n_surfs)
 
-    # sqrt_g(0,0) via Boozer identity:
-    #   <sqrt(g)> * <B²> = G*iota + I  (where G = bvco, I = buco in SI)
-    sqrtg_arr = np.zeros(n_surfs)
     idx00 = np.where((xm == 0) & (xn == 0))[0]
+    sqrtg_arr = np.zeros(n_surfs)
     for i in range(n_surfs):
         b = bmnc_2d[i, :]
         B00_sq = b[idx00[0]]**2 if len(idx00) > 0 else 0.0
@@ -175,12 +149,12 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
 
     if flux_override is not None:
         flux_total = float(flux_override)
-    elif np.any(phi_arr != 0):
-        flux_total = float(phi_arr[-1])
+    elif 'phi_b' in f.variables and np.any(phi_full != 0):
+        flux_total = float(phi_full[-1])
     else:
         flux_total = 0.0
-        print("      [nc_to_neort] WARNING: flux = 0 (phi_b not implemented)."
-              " Pass flux_override=vmec.wout.phi[-1] for correct results.")
+        print("      [nc_to_neort] WARNING: flux = 0."
+              " Pass flux_override=vmec.wout.phi[-1].")
 
     if a_override is not None:
         a_minor = float(a_override)
@@ -188,24 +162,18 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
         a_minor = R0 / aspect
     else:
         a_minor = R0 / 10.0
-        print("      [nc_to_neort] WARNING: aspect_b unavailable."
-              " Pass a_override=vmec.wout.Aminor_p for correct results.")
 
-    # ── Build mode tables ───────────────────────────────────────
-    # NEO-RT equilibrium (in_file) requires n=0 modes ONLY with
-    # m = 0, 1, ..., m0b in ascending order (fast_sin_cos assumes this).
-    # Non-axisymmetric harmonics (n≠0) belong in a perturbation file.
+    # ── Build lookup table: (m, n/nfp) → index in booz_xform arrays
     n_bare = xn // nfp if nfp != 0 else xn
+    mode_idx = {}
+    for k in range(len(xm)):
+        key = (int(xm[k]), int(n_bare[k]))
+        mode_idx[key] = k
 
-    n0_mask = (xn == 0)
-    n0_idx = np.where(n0_mask)[0]
-    n0_idx = n0_idx[np.argsort(xm[n0_idx])]  # ascending m
+    # Target modes: m = 0..m0b, n = 0..n0b  (n≥0 for stellarator symmetry)
+    nmode_out = (m0b + 1) * (n0b + 1)
 
-    n0b_out = 0           # equilibrium file is axisymmetric
-    target_nmode = m0b + 1
-    nmode_out = min(len(n0_idx), target_nmode)
-
-    # Find dominant non-axisymmetric harmonic for perturbation estimate
+    # Find dominant non-axisymmetric harmonic for perturbation info
     mid_surf = n_surfs // 2
     B00 = float(bmnc_2d[mid_surf, idx00[0]]) if len(idx00) > 0 else 1.0
     nz_mask = (xn != 0)
@@ -218,21 +186,21 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
         best = np.argmax(nz_amps)
         gi = nz_idx[best]
         dominant_epsmn = float(nz_amps[best] / abs(B00)) if B00 != 0 else 0.0
-        dominant_mph = abs(int(xn[gi]))   # physical toroidal mode number (already ×nfp)
+        dominant_mph = abs(int(xn[gi]))
         dominant_m0 = int(xm[gi])
         print(f"      [nc_to_neort] Dominant non-axi harmonic:"
               f" m={dominant_m0}, n={int(n_bare[gi])},"
               f" |bmnc|/B00={dominant_epsmn:.4e}")
 
-    # ── Write in_file (n=0 equilibrium only) ─────────────────────
+    # ── Write in_file with FULL Boozer spectrum ──────────────────
     with open(output_path, 'w') as out:
         out.write("CC Boozer-coordinate data file\n")
-        out.write("CC Converted by SQuID nc_to_neort.py (n=0 equilibrium)\n")
+        out.write("CC Converted by SQuID nc_to_neort.py (full 3D spectrum)\n")
         out.write(f"CC Source: {boozmn_path}\n")
         out.write("CC\n")
         out.write(" m0b   n0b  nsurf  nper    flux [Tm^2]"
                   "        a [m]          R [m]\n")
-        out.write(f"  {m0b:4d} {n0b_out:4d} {n_surfs:5d} {nfp:4d}"
+        out.write(f"  {m0b:4d} {n0b:4d} {n_surfs:5d} {nfp:4d}"
                   f"  {flux_total:16.8e}   {a_minor:.8f}   {R0:.8f}\n")
 
         for i in range(n_surfs):
@@ -249,22 +217,28 @@ def convert_boozmn_to_neort(boozmn_path, output_path="in_file",
                       "         zmnc [m]         zmns [m]"
                       "         vmnc [ ]         vmns [ ]"
                       "         bmnc [T]         bmns [T]\n")
-            for k in range(nmode_out):
-                gi = n0_idx[k]
-                out.write(
-                    f"  {xm[gi]:3d}  {0:3d}"
-                    f"   {rmnc_2d[i, gi]:.8e}"
-                    f"   {rmns_2d[i, gi]:.8e}"
-                    f"   {zmnc_2d[i, gi]:.8e}"
-                    f"   {zmns_2d[i, gi]:.8e}"
-                    f"   {pmnc_2d[i, gi]:.8e}"
-                    f"   {pmns_2d[i, gi]:.8e}"
-                    f"   {bmnc_2d[i, gi]:.8e}"
-                    f"   {bmns_2d[i, gi]:.8e}\n")
-            for k in range(nmode_out, target_nmode):
-                out.write(f"  {k:3d}  {0:3d}"
-                          + "   0.00000000e+00" * 8 + "\n")
+
+            for n_idx in range(n0b + 1):
+                for m_idx in range(m0b + 1):
+                    key = (m_idx, n_idx)
+                    if key in mode_idx:
+                        k = mode_idx[key]
+                        out.write(
+                            f"  {m_idx:3d}  {n_idx:3d}"
+                            f"   {rmnc_2d[i, k]:.8e}"
+                            f"   {rmns_2d[i, k]:.8e}"
+                            f"   {zmnc_2d[i, k]:.8e}"
+                            f"   {zmns_2d[i, k]:.8e}"
+                            f"   {pmnc_2d[i, k]:.8e}"
+                            f"   {pmns_2d[i, k]:.8e}"
+                            f"   {bmnc_2d[i, k]:.8e}"
+                            f"   {bmns_2d[i, k]:.8e}\n")
+                    else:
+                        out.write(
+                            f"  {m_idx:3d}  {n_idx:3d}"
+                            + "   0.00000000e+00" * 8 + "\n")
 
     print(f"      [nc_to_neort] Wrote {output_path}"
-          f"  ({n_surfs} surfaces, {target_nmode} modes, n0b=0)")
+          f"  ({n_surfs} surfaces, {nmode_out} modes,"
+          f" m0b={m0b}, n0b={n0b})")
     return output_path, dominant_epsmn, dominant_m0, dominant_mph

@@ -10,8 +10,10 @@ Usage:
     python scripts/diagnose.py --nc_file path/to/wout_xxx.nc --plot
 """
 
-import sys
 import os
+os.environ.setdefault("JAX_PLATFORMS", "cpu")
+
+import sys
 import argparse
 import numpy as np
 
@@ -37,12 +39,9 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
     Evaluate effective ripple eps_eff at normalised flux *s_val*.
 
     Graceful degradation:
-      1. NEO-RT — run Boozer transform (→ boozmn_*.nc), convert to
-         NEO-RT in_file via nc_to_neort, run neo_rt.x, parse D11
-         transport coefficient from output.
-      2. Boozer proxy fallback — (B_max - B_min) / (2*B00), a ripple
-         amplitude proxy (not the neoclassical eps_eff; good QI has
-         true eps_eff < 1%).
+      1. DESC (Nemov formula via bounce integrals) — most reliable.
+      2. NEO-RT — Boozer transform + Fortran solver.
+      3. Boozer proxy fallback — (B_max - B_min) / (2*B00).
 
     Returns
     -------
@@ -50,7 +49,34 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
     """
     import glob
 
-    # ── Priority 1: NEO-RT ──────────────────────────────────────────
+    # ── Priority 1: DESC effective ripple (Nemov formula) ────────────
+    try:
+        import numpy as _np
+        from desc.vmec import VMECIO
+        from desc.grid import LinearGrid
+        from desc.objectives import EffectiveRipple
+
+        print(f"      [DESC] Computing effective ripple at s={s_val} ...")
+        eq = VMECIO.load(nc_file_path)
+        rho = _np.array([_np.sqrt(s_val)])
+        grid = LinearGrid(
+            rho=rho, M=eq.M_grid, N=eq.N_grid,
+            NFP=eq.NFP, sym=False,
+        )
+        obj = EffectiveRipple(eq, grid=grid, num_transit=10, num_pitch=31)
+        obj.build(verbose=0)
+        f = obj.compute(eq.params_dict)
+        eps_eff = float(f[0])
+        if not _np.isfinite(eps_eff):
+            raise ValueError("DESC returned NaN/Inf")
+        return (eps_eff, "DESC (Nemov bounce-integral)")
+
+    except ImportError:
+        print("      [DESC] Not available, trying NEO-RT ...")
+    except Exception as e:
+        print(f"      [DESC] Failed: {e}, trying NEO-RT ...")
+
+    # ── Priority 2: NEO-RT ──────────────────────────────────────────
     try:
         from simsopt.mhd.boozer import Boozer
         import nc_to_neort
@@ -317,7 +343,37 @@ def main():
         import matplotlib.pyplot as plt
         print(f"\n--- Generating plots ---")
 
-        fig1 = plot_boozer_surface(vmec, s_val=0.5)
+        boozer_s_vals = [0.0, 0.25, 0.5, 0.75, 1.0]
+        fig1, axes1 = plt.subplots(2, 3, figsize=(18, 10))
+        axes_flat = axes1.flatten()
+        from squid.evaluation.evaluate import run_boozer, reconstruct_B
+        nfp = int(vmec.wout.nfp)
+        safe_s = [max(0.01, min(0.99, s)) for s in boozer_s_vals]
+        _, all_surf = run_boozer(vmec, safe_s, mpol=20, ntor=20)
+        ntheta, nphi = 100, 100
+        th = np.linspace(0, 2 * np.pi, ntheta)
+        ze = np.linspace(0, 2 * np.pi / nfp, nphi)
+        TH, ZE = np.meshgrid(th, ze, indexing="ij")
+        b_all = [reconstruct_B(d["m"], d["n"], d["bmnc"], TH, ZE) for d in all_surf]
+        vmin = min(b.min() for b in b_all)
+        vmax = max(b.max() for b in b_all)
+        for i, (s, data, B_2d) in enumerate(zip(boozer_s_vals, all_surf, b_all)):
+            ax = axes_flat[i]
+            cs = ax.contourf(ZE, TH, B_2d, levels=30, cmap="viridis",
+                             vmin=vmin, vmax=vmax)
+            iota = data["iota"]
+            zl = np.linspace(0, 2 * np.pi / nfp, 200)
+            ax.plot(zl, (iota * zl) % (2 * np.pi), "w--", alpha=0.6, lw=1)
+            ax.set_title(f"s = {s:.2f}", fontsize=13)
+            if i >= 3:
+                ax.set_xlabel(r"Boozer $\zeta$")
+            if i % 3 == 0:
+                ax.set_ylabel(r"Boozer $\theta$")
+        axes_flat[-1].set_visible(False)
+        cbar_ax = fig1.add_axes([0.70, 0.08, 0.2, 0.03])
+        fig1.colorbar(cs, cax=cbar_ax, orientation="horizontal", label="|B| (T)")
+        fig1.suptitle(f"|B| on Boozer surfaces (nfp={nfp})", fontsize=15, y=0.98)
+        fig1.tight_layout(rect=[0, 0.05, 1, 0.96])
         fig1.savefig("boozer_surface.png", dpi=150, bbox_inches="tight")
         print("  Saved: boozer_surface.png")
 

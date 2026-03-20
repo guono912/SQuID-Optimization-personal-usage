@@ -35,3 +35,11 @@ __pycache__/
 *Zone.Identifier
 $RECYCLE.BIN/
 Desktop.ini
+
+
+in_file
+one_time.py
+parvmecinfo.txt
+squid_diag*
+timings.txt
+*.png

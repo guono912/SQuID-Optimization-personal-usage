@@ -343,37 +343,60 @@ def main():
         import matplotlib.pyplot as plt
         print(f"\n--- Generating plots ---")
 
-        boozer_s_vals = [0.0, 0.25, 0.5, 0.75, 1.0]
-        fig1, axes1 = plt.subplots(2, 3, figsize=(18, 10))
+        # ---------------------------------------------------------
+        # 替换后的 Boozer Surface 画图代码
+        # ---------------------------------------------------------
+        boozer_s_vals = [0.25, 0.5, 0.75, 1.0] # 对应图中的4个面
+        fig1, axes1 = plt.subplots(2, 2, figsize=(8, 5.5)) # 改为 2x2 布局
         axes_flat = axes1.flatten()
         from squid.evaluation.evaluate import run_boozer, reconstruct_B
+        
         nfp = int(vmec.wout.nfp)
         safe_s = [max(0.01, min(0.99, s)) for s in boozer_s_vals]
         _, all_surf = run_boozer(vmec, safe_s, mpol=20, ntor=20)
+        
         ntheta, nphi = 100, 100
         th = np.linspace(0, 2 * np.pi, ntheta)
         ze = np.linspace(0, 2 * np.pi / nfp, nphi)
         TH, ZE = np.meshgrid(th, ze, indexing="ij")
         b_all = [reconstruct_B(d["m"], d["n"], d["bmnc"], TH, ZE) for d in all_surf]
-        vmin = min(b.min() for b in b_all)
-        vmax = max(b.max() for b in b_all)
+        
         for i, (s, data, B_2d) in enumerate(zip(boozer_s_vals, all_surf, b_all)):
             ax = axes_flat[i]
-            cs = ax.contourf(ZE, TH, B_2d, levels=30, cmap="viridis",
-                             vmin=vmin, vmax=vmax)
-            iota = data["iota"]
-            zl = np.linspace(0, 2 * np.pi / nfp, 200)
-            ax.plot(zl, (iota * zl) % (2 * np.pi), "w--", alpha=0.6, lw=1)
-            ax.set_title(f"s = {s:.2f}", fontsize=13)
-            if i >= 3:
-                ax.set_xlabel(r"Boozer $\zeta$")
-            if i % 3 == 0:
-                ax.set_ylabel(r"Boozer $\theta$")
-        axes_flat[-1].set_visible(False)
-        cbar_ax = fig1.add_axes([0.70, 0.08, 0.2, 0.03])
-        fig1.colorbar(cs, cax=cbar_ax, orientation="horizontal", label="|B| (T)")
-        fig1.suptitle(f"|B| on Boozer surfaces (nfp={nfp})", fontsize=15, y=0.98)
-        fig1.tight_layout(rect=[0, 0.05, 1, 0.96])
+            
+            # 动态计算 level，大约18条线，防止过于密集
+            levels = np.linspace(B_2d.min(), B_2d.max(), 18)
+            
+            # 使用 contour 代替 contourf，cmap 采用 'plasma' 以匹配原图紫色到黄色的渐变
+            cs = ax.contour(ZE, TH, B_2d, levels=levels, cmap="plasma", linewidths=1.2)
+            
+            # 添加左上角的标签文本框 (例如: |B| @ s=0.25)
+            # 根据图中s=1没有小数位的情况做一点格式化
+            s_label = f"{s:g}" if s == 1.0 else f"{s}"
+            ax.text(0.03, 0.95, f"|B| @ s={s_label}", transform=ax.transAxes,
+                    fontsize=10, fontweight='bold', va='top', ha='left',
+                    bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2))
+            
+            # 设置刻度以匹配原图
+            ax.set_xticks([0, 2 * np.pi / nfp])
+            # 图中 x 轴右侧刻度为 \pi/2，这通常对应 nfp=4 的情况。这里做个动态适配
+            if nfp == 4:
+                ax.set_xticklabels(['0', r'$\pi/2$'], fontsize=11)
+            else:
+                ax.set_xticklabels(['0', rf'$2\pi/{nfp}$'], fontsize=11)
+                
+            ax.set_yticks([0, 2 * np.pi])
+            ax.set_yticklabels(['0', r'$2\pi$'], fontsize=11)
+            
+            # 坐标轴标签
+            ax.set_xlabel(r"$\phi$", fontsize=12, labelpad=-8, fontweight='bold')
+            ax.set_ylabel(r"$\theta$", fontsize=12, labelpad=-5, fontweight='bold')
+            
+            # 为每个子图添加单独的 colorbar
+            cbar = fig1.colorbar(cs, ax=ax, fraction=0.046, pad=0.04)
+            cbar.ax.tick_params(labelsize=10)
+            
+        fig1.tight_layout()
         fig1.savefig("boozer_surface.png", dpi=150, bbox_inches="tight")
         print("  Saved: boozer_surface.png")
 

@@ -8,6 +8,16 @@ diagnostic plots, including stability and transport metrics.
 Usage:
     python scripts/diagnose.py --nc_file path/to/wout_xxx.nc
     python scripts/diagnose.py --nc_file path/to/wout_xxx.nc --plot
+    python scripts/diagnose.py --nc_file path/to/wout_xxx.nc --extended
+    python scripts/diagnose.py --nc_file path/to/wout_xxx.nc --extended \
+        --extended_surfaces 0.1 0.3 0.5
+    python scripts/diagnose.py --nc_file path/to/wout_xxx.nc --extended \
+        --ae --ae_surfaces 0.2 0.5 0.8 --plot
+
+Tiers:
+    default      -> core SQuID + equilibrium sanity + geometry/stability preview
+    --extended   -> add third-tier transport diagnostics (ITG proxy)
+    --ae         -> add Available Energy on top of --extended
 """
 
 import os
@@ -22,14 +32,13 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."
 from simsopt.mhd import Vmec
 
 from squid.evaluation.evaluate import (
-    evaluate_squid,
+    evaluate_squid_detailed,
     evaluate_itg,
-    plot_boozer_surface,
-    plot_squash_stretch,
-    plot_gradient_diagnostics,
     plot_J_contours,
+    plot_squid_core_diagnostics,
+    plot_transport_diagnostics,
 )
-from squid.evaluation.axis_geometry import axis_geometry_from_vmec, plot_axis_geometry
+from squid.evaluation.axis_geometry import axis_geometry_from_vmec
 from squid.evaluation.available_energy import ae_diagnostics
 from squid.core.boozer_utils import run_boozer
 
@@ -188,11 +197,11 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
         raise RuntimeError(f"Could not parse D11 from {out_file}")
 
     except ImportError as e:
-        print(f"      [Fallback] NEO-RT 依赖不可用: {e}")
+        print(f"      [Fallback] NEO-RT dependencies not available: {e}")
     except FileNotFoundError as e:
-        print(f"      [Fallback] 文件未找到: {e}")
+        print(f"      [Fallback] File not found: {e}")
     except Exception as e:
-        print(f"      [Fallback] NEO-RT 评估失败: {e}")
+        print(f"      [Fallback] NEO-RT evaluation failed: {e}")
 
     # ── Priority 2: Boozer proxy (fallback) ─────────────────────────
     try:
@@ -213,6 +222,267 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
     return (None, "No method available")
 
 
+def _evaluate_effective_ripple_series(vmec, s_vals, nc_file_path):
+    """Evaluate the ripple metric on several representative surfaces."""
+    results = []
+    for s_val in s_vals:
+        value, source = _evaluate_effective_ripple(vmec, float(s_val), nc_file_path)
+        results.append({
+            "s": float(s_val),
+            "value": value,
+            "source": source,
+        })
+    return results
+
+
+def _compute_equilibrium_sanity(vmec, squid_info):
+    """Basic numerical sanity checks for a single equilibrium."""
+    fails, warns = [], []
+    wout = vmec.wout
+
+    scalar_checks = {
+        "aspect": float(getattr(wout, "aspect", np.nan)),
+        "Aminor_p": float(getattr(wout, "Aminor_p", np.nan)),
+        "phi_edge": float(np.array(getattr(wout, "phi", [np.nan]))[-1]),
+    }
+    for name, value in scalar_checks.items():
+        if not np.isfinite(value):
+            fails.append(f"{name} is not finite")
+    if np.isfinite(scalar_checks["Aminor_p"]) and scalar_checks["Aminor_p"] <= 0:
+        fails.append("Aminor_p <= 0")
+
+    iotaf = np.array(getattr(wout, "iotaf", []), dtype=float)
+    if iotaf.size < 2:
+        fails.append("iota profile missing or too short")
+    elif not np.all(np.isfinite(iotaf[[0, -1]])):
+        fails.append("iota axis/edge is not finite")
+
+    for key in ("f_QI", "f_maxJ", "mirror_ratio"):
+        value = float(squid_info.get(key, np.nan))
+        if not np.isfinite(value):
+            fails.append(f"{key} is not finite")
+
+    if not squid_info.get("common_B_valid", True):
+        fails.append("no common B* range across requested diagnostic surfaces")
+
+    if not np.all(np.isfinite(iotaf)):
+        warns.append("interior iota profile contains non-finite values")
+
+    status = "OK"
+    if fails:
+        status = "FAIL"
+    elif warns:
+        status = "WARN"
+    return {"status": status, "fails": fails, "warns": warns}
+
+
+def _print_equilibrium_sanity(sanity):
+    print(f"  Status: {sanity['status']}")
+    for msg in sanity["fails"]:
+        print(f"    FAIL: {msg}")
+    for msg in sanity["warns"]:
+        print(f"    WARN: {msg}")
+
+
+def _sorted_surface_dict(metric_dict):
+    """Return sorted (s, value) arrays from a {surface: value} dict."""
+    items = [
+        (float(k), float(v))
+        for k, v in metric_dict.items()
+        if np.isscalar(k)
+    ]
+    items.sort(key=lambda kv: kv[0])
+    s = np.array([float(k) for k, _ in items], dtype=float)
+    values = np.array([float(v) for _, v in items], dtype=float)
+    return s, values
+
+
+def _grade_qi(qi_surface_rms):
+    if len(qi_surface_rms) == 0 or not np.any(np.isfinite(qi_surface_rms)):
+        return "unknown"
+    worst = float(np.nanmax(qi_surface_rms))
+    if worst < 6e-3:
+        return "good"
+    if worst < 1.2e-2:
+        return "watch"
+    return "poor"
+
+
+def _grade_maxj(pass_ratio):
+    if not np.isfinite(pass_ratio):
+        return "unknown"
+    if pass_ratio >= 0.8:
+        return "strong"
+    if pass_ratio >= 0.6:
+        return "mixed"
+    return "weak"
+
+
+def _grade_ripple(ripple_results):
+    vals = [
+        float(item["value"]) for item in ripple_results
+        if item["value"] is not None and np.isfinite(item["value"])
+    ]
+    if not vals:
+        return "unknown"
+    worst = max(vals)
+    if worst < 5e-3:
+        return "good"
+    if worst < 1e-2:
+        return "watch"
+    return "poor"
+
+
+def _grade_well(well_depth):
+    if not np.isfinite(well_depth):
+        return "unknown"
+    if well_depth > 0.01:
+        return "good"
+    if well_depth >= 0.0:
+        return "watch"
+    return "poor"
+
+
+def _main_issue_summary(info, ripple_results=None, itg_info=None, ae_info=None):
+    notes = []
+
+    if len(info["s_vals"]) > 0:
+        worst_qi_s = float(info["s_vals"][int(info["qi_worst_surface_idx"])])
+        notes.append(f"QI worst at s={worst_qi_s:.2f}")
+
+    if len(info["interval_centers"]) > 0 and info["maxj_worst_interval_idx"] >= 0:
+        worst_interval = float(info["interval_centers"][int(info["maxj_worst_interval_idx"])])
+        notes.append(
+            f"max-J weakest near s~{worst_interval:.2f}, "
+            f"shallow trapped depth λ_N~{info['maxj_worst_lambda']:.03f}"
+        )
+
+    if ripple_results:
+        finite = [item for item in ripple_results
+                  if item["value"] is not None and np.isfinite(item["value"])]
+        if finite:
+            worst = max(finite, key=lambda item: float(item["value"]))
+            notes.append(f"ripple rises outward; worst checked at s={worst['s']:.2f}")
+
+    if itg_info is not None and len(itg_info.get("per_surface", {})) > 0:
+        itg_s, itg_vals = _sorted_surface_dict(itg_info["per_surface"])
+        if len(itg_vals) > 0 and np.any(np.isfinite(itg_vals)):
+            worst_idx = int(np.nanargmax(itg_vals))
+            notes.append(f"ITG proxy peaks at s={itg_s[worst_idx]:.2f}")
+
+    if ae_info is not None:
+        ae_s, ae_vals = _sorted_surface_dict({k: v for k, v in ae_info.items() if k != "total"})
+        if len(ae_vals) > 0 and np.any(np.isfinite(ae_vals)):
+            worst_idx = int(np.nanargmax(ae_vals))
+            notes.append(f"AE peaks at s={ae_s[worst_idx]:.2f}")
+
+    return notes
+
+
+def _overall_verdict(sanity, qi_grade, maxj_grade, ripple_grade):
+    if sanity["status"] == "FAIL":
+        return "fail"
+    if maxj_grade == "weak" or ripple_grade == "poor":
+        return "needs work"
+    if qi_grade == "good" and maxj_grade in {"strong", "mixed"} and ripple_grade != "poor":
+        return "promising"
+    return "mixed"
+
+
+def _plot_axis_geometry_summary(ax_info, mercier_data=None, well_data=None,
+                                ripple_results=None):
+    """Compact axis/stability summary figure."""
+    import matplotlib.pyplot as plt
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 8))
+
+    phi = ax_info["phi"]
+    curvature = ax_info["curvature"]
+    torsion = ax_info["torsion"]
+
+    ax = axes[0, 0]
+    ax.plot(phi, curvature, "k-", lw=1.5)
+    ax.set_xlabel(r"$\varphi$")
+    ax.set_ylabel(r"$\kappa$")
+    ax.set_yscale("log")
+    ax.grid(True, alpha=0.3)
+    ax.set_title("Axis curvature")
+
+    ax = axes[0, 1]
+    ax.plot(phi, torsion, "k-", lw=1.5)
+    ax.axhline(0, color="gray", ls=":", alpha=0.5)
+    ax.set_xlabel(r"$\varphi$")
+    ax.set_ylabel(r"$\tau$")
+    ax.grid(True, alpha=0.3)
+    ax.set_title("Axis torsion")
+
+    ax = axes[1, 0]
+    handles, labels = [], []
+    if mercier_data is not None:
+        line = ax.plot(
+            mercier_data["s"],
+            mercier_data["values"],
+            marker="o",
+            lw=1.8,
+            color="tab:blue",
+            label=r"$D_{\mathrm{Merc}}$",
+        )[0]
+        ax.axhline(0, color="tab:blue", ls=":", alpha=0.4)
+        handles.append(line)
+        labels.append(line.get_label())
+    ax.set_xlabel("s")
+    ax.set_ylabel(r"$D_{\mathrm{Merc}}$")
+    ax.grid(True, alpha=0.3)
+    ax.set_title("Mercier and magnetic well")
+
+    if well_data is not None:
+        ax2 = ax.twinx()
+        line2 = ax2.plot(
+            well_data["s"],
+            100.0 * well_data["values"],
+            marker="s",
+            lw=1.5,
+            ls="--",
+            color="tab:orange",
+            label="well depth [%]",
+        )[0]
+        ax2.axhline(0, color="tab:orange", ls=":", alpha=0.4)
+        ax2.set_ylabel("Well depth [%]")
+        handles.append(line2)
+        labels.append(line2.get_label())
+    if handles:
+        ax.legend(handles, labels, loc="best")
+
+    ax = axes[1, 1]
+    if ripple_results:
+        s = np.array([item["s"] for item in ripple_results], dtype=float)
+        y = np.array([
+            np.nan if item["value"] is None else float(item["value"])
+            for item in ripple_results
+        ])
+        ax.plot(s, y, marker="o", lw=1.8, color="tab:green")
+        for idx, item in enumerate(ripple_results):
+            src = item["source"]
+            short = "DESC" if "DESC" in src else (
+                "NEO-RT" if "NEO-RT" in src else (
+                    "proxy" if "proxy" in src else "n/a"
+                )
+            )
+            ax.annotate(short, (s[idx], y[idx]),
+                        textcoords="offset points", xytext=(0, 6),
+                        ha="center", fontsize=8)
+    ax.set_xlabel("s")
+    ax.set_ylabel("Ripple metric")
+    ax.grid(True, alpha=0.3)
+    ax.set_title("Effective ripple / proxy")
+
+    fig.suptitle(
+        f"Axis and stability summary (L_axis={ax_info['axis_length']:.3f} m)"
+    )
+    plt.tight_layout()
+    return fig
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="SQuID diagnostic evaluation (no optimisation)"
@@ -227,8 +497,19 @@ def main():
     parser.add_argument("--itg_method", choices=["drift_curvature", "vacuum_dBds"],
                         default="vacuum_dBds",
                         help="Bad-curvature detection method for f_nabla_s")
-    parser.add_argument("--eps_eff_surface", type=float, default=0.5,
-                        help="Normalised flux surface for effective ripple evaluation (default 0.5)")
+    parser.add_argument("--extended", action="store_true",
+                        help="Run third-tier transport diagnostics (ITG proxy, optional AE)")
+    parser.add_argument("--extended_surfaces", type=float, nargs="+",
+                        default=[0.1, 0.3, 0.5],
+                        help="Flux surfaces for third-tier ITG diagnostics")
+    parser.add_argument("--eps_eff_surface", type=float, default=None,
+                        help="Deprecated single-surface effective ripple evaluation")
+    parser.add_argument("--eps_eff_surfaces", type=float, nargs="+",
+                        default=[0.25, 0.5, 0.75],
+                        help="Normalised flux surfaces for effective ripple evaluation")
+    parser.add_argument("--ae_surfaces", type=float, nargs="+",
+                        default=[0.2, 0.5, 0.8],
+                        help="Flux surfaces for AE diagnostics when --ae is enabled")
     parser.add_argument("--ae", action="store_true",
                         help="Compute Available Energy (TEM turbulence metric)")
     parser.add_argument("--ae_omn", type=float, default=1.0,
@@ -256,63 +537,125 @@ def main():
     )
     print(f"  Surfaces: {s_vals}")
 
-    # SQuID evaluation
-    print(f"\n--- SQuID Targets ---")
-    info = evaluate_squid(
+    print(f"\n--- Core SQuID Targets ---")
+    info = evaluate_squid_detailed(
         vmec, s_vals=s_vals,
         num_alpha=args.num_alpha,
         num_pitch=args.num_pitch,
+        verbose=False,
     )
 
-    # ITG evaluation
-    print(f"\n--- ITG Target ---")
-    itg_info = evaluate_itg(
-        vmec,
-        snorms=np.array([0.1, 0.3, 0.5]),
-        method=args.itg_method,
-    )
+    qi_grade = _grade_qi(info["qi_surface_rms"])
+    maxj_grade = _grade_maxj(info["maxj_global_pass_ratio"])
+
+    print(f"  f_QI             = {info['f_QI']:.6e}")
+    print(f"  f_maxJ           = {info['f_maxJ']:.6e}")
+    print(f"  mirror ratio     = {info['mirror_ratio']:.4f}")
+    print(f"  QI grade         = {qi_grade}")
+    print(f"  QI worst surface = s={info['s_vals'][info['qi_worst_surface_idx']]:.2f}")
+    for s_val, rms, p95 in zip(info["s_vals"], info["qi_surface_rms"], info["qi_surface_p95"]):
+        print(f"    QI @ s={s_val:.2f}: RMS={rms:.3e}, p95={p95:.3e}")
+
+    if len(info["interval_centers"]) > 0:
+        worst_interval_idx = int(info["maxj_worst_interval_idx"])
+        print(f"  max-J grade      = {maxj_grade}")
+        print(f"  max-J pass ratio = {info['maxj_global_pass_ratio']:.3f}")
+        print(f"  max-J violation  = {info['maxj_global_violation_fraction']:.3f}")
+        print("  max-J per interval:")
+        for center, pass_ratio, frac, worst_lambda in zip(
+            info["interval_centers"],
+            info["maxj_interval_pass_ratio"],
+            info["maxj_interval_violation_fraction"],
+            info["maxj_interval_worst_lambda"],
+        ):
+            print(
+                f"    s~{center:.2f}: pass={pass_ratio:.3f}, "
+                f"violation={frac:.3f}, worst λ_N≈{worst_lambda:.3f}"
+            )
+        print(
+            "  max-J worst interval = "
+            f"s~{info['interval_centers'][worst_interval_idx]:.2f}"
+        )
+
+    print(f"\n--- Equilibrium Sanity ---")
+    sanity = _compute_equilibrium_sanity(vmec, info)
+    _print_equilibrium_sanity(sanity)
+
+    print(f"\n--- Basic Geometry ---")
+    print(f"  Aspect ratio = {vmec.wout.aspect:.4f}")
+    print(f"  Iota (core)  = {vmec.wout.iotaf[0]:.4f}")
+    print(f"  Iota (edge)  = {vmec.wout.iotaf[-1]:.4f}")
+
+    if sanity["status"] == "FAIL":
+        print("\nAborting further diagnostics: equilibrium failed sanity checks.")
+        raise SystemExit(1)
 
     # ---------------------------------------------------------
     # NEW: Stability & Transport Diagnostics
     # ---------------------------------------------------------
     print(f"\n--- Stability & Transport Diagnostics ---")
-    
+    mercier_data = None
+    well_data = None
+    well_depth = float("nan")
+
     # 1. Mercier Stability Criterion
     try:
-        dmerc = vmec.wout.Dmerc[1:]
-        min_dmerc = np.min(dmerc)
+        dmerc = np.array(vmec.wout.Dmerc[1:], dtype=float)
+        s_half = np.array(vmec.s_half_grid, dtype=float)
+        mercier_data = {"s": s_half, "values": dmerc}
+        min_idx = int(np.argmin(dmerc))
+        min_dmerc = float(dmerc[min_idx])
         if min_dmerc > 0:
-            print(f"  Mercier Stability: STABLE (Min D_Merc = {min_dmerc:.4e} > 0)")
+            print(
+                "  Mercier Stability: "
+                f"STABLE (min D_Merc = {min_dmerc:.4e} at s={s_half[min_idx]:.2f})"
+            )
         else:
-            print(f"  Mercier Stability: UNSTABLE (Min D_Merc = {min_dmerc:.4e} < 0)")
+            print(
+                "  Mercier Stability: "
+                f"UNSTABLE (min D_Merc = {min_dmerc:.4e} at s={s_half[min_idx]:.2f})"
+            )
     except Exception:
         print("  Mercier Stability: [Not available in this nc file]")
-        
-    
 
     # 2. Magnetic Well Depth
     try:
-        vp = vmec.wout.vp[1:] # Specific volume on half mesh
-        well_depth = (vp[0] - vp[-1]) / vp[0]
-        print(f"  Magnetic Well Depth: {well_depth * 100:.2f}% (>0 means Well, <0 means Hill)")
+        vp = np.array(vmec.wout.vp[1:], dtype=float)
+        well_profile = (vp[0] - vp) / max(vp[0], 1e-30)
+        well_data = {"s": np.array(vmec.s_half_grid, dtype=float), "values": well_profile}
+        well_depth = float(well_profile[-1])
+        min_well_idx = int(np.argmin(well_profile))
+        print(
+            "  Magnetic Well Depth: "
+            f"edge={well_depth * 100:.2f}%, "
+            f"min={well_profile[min_well_idx] * 100:.2f}% at "
+            f"s={well_data['s'][min_well_idx]:.2f}"
+        )
     except Exception:
         print("  Magnetic Well Depth: [Not available in this nc file]")
 
-
     # 3. Effective Ripple (eps_eff)
-    print("  Effective Ripple (eps_eff / 有效波纹度):")
-    eps_eff_surface = getattr(args, "eps_eff_surface", 0.5)
-    eps_eff_value, eps_eff_source = _evaluate_effective_ripple(vmec, eps_eff_surface, args.nc_file)
-    if eps_eff_value is not None:
-        print(f"      eps_eff at s={eps_eff_surface}: {eps_eff_value:.4e}  ({eps_eff_source})")
-        if "Boozer proxy" in eps_eff_source:
-            print("      [注] 上述为波纹幅度代理 (B_max-B_min)/(2*B00)，非新经典 ε_eff。"
-                  "真实 ε_eff 需 NEO-RT：在同目录放 in_file 与 diagnose_eps.in 后重跑；良好 QI 位型 ε_eff 通常 < 1%。")
-    else:
-        print(f"      [Could not evaluate. {eps_eff_source}]")
+    print("  Effective Ripple / Ripple Proxy:")
+    eps_eff_surfaces = args.eps_eff_surfaces
+    if args.eps_eff_surface is not None:
+        eps_eff_surfaces = [args.eps_eff_surface]
+    eps_eff_surfaces = sorted(set(max(0.01, min(0.99, float(s))) for s in eps_eff_surfaces))
+    eps_eff_results = _evaluate_effective_ripple_series(vmec, eps_eff_surfaces, args.nc_file)
+    for item in eps_eff_results:
+        if item["value"] is None:
+            print(f"    s={item['s']:.2f}: [Could not evaluate. {item['source']}]")
+        else:
+            print(f"    s={item['s']:.2f}: {item['value']:.4e}  ({item['source']})")
+            if "Boozer proxy" in item["source"]:
+                print("      [Note] This value is a ripple amplitude proxy, not the true ε_eff.")
+            if "NEO-RT D11" in item["source"]:
+                print("      [Note] This value is the NEO-RT transport coefficient D11, not the direct ε_eff.")
+    ripple_grade = _grade_ripple(eps_eff_results)
+    print(f"  Ripple grade: {ripple_grade}")
 
     # 4. Axis Geometry
     print(f"\n--- Axis Geometry ---")
+    ax_info = None
     try:
         ax_info = axis_geometry_from_vmec(vmec)
         kappa = ax_info["curvature"]
@@ -325,18 +668,79 @@ def main():
     except Exception as e:
         print(f"  [Failed] {e}")
 
-    # 5. Available Energy (TEM turbulence)
-    if args.ae:
-        print(f"\n--- Available Energy (TEM) ---")
-        try:
-            ae_info = ae_diagnostics(
-                vmec, s_vals=s_vals,
-                omn=args.ae_omn, omt=args.ae_omt,
-                n_alpha=min(args.num_alpha, 4),
-                n_turns=3, lam_res=200, gridpoints=512,
+    # ---------------------------------------------------------
+    # Third-tier / extended diagnostics
+    # ---------------------------------------------------------
+    run_extended = args.extended or args.ae
+    itg_info = None
+    ae_info = None
+
+    if run_extended:
+        print(f"\n--- Extended Transport Diagnostics (reference only) ---")
+
+        itg_surfaces = np.array(
+            [max(0.01, min(0.99, float(s))) for s in args.extended_surfaces],
+            dtype=float,
+        )
+        itg_surfaces = np.unique(itg_surfaces)
+        itg_info = evaluate_itg(
+            vmec,
+            snorms=itg_surfaces,
+            method=args.itg_method,
+            verbose=False,
+        )
+        itg_s, itg_vals = _sorted_surface_dict(itg_info["per_surface"])
+        print(f"  ITG proxy method = {args.itg_method}")
+        print(f"  Total f_nabla_s  = {itg_info['total']:.6e}")
+        if len(itg_vals) > 0 and np.any(np.isfinite(itg_vals)):
+            worst_itg_idx = int(np.nanargmax(itg_vals))
+            print(f"  Worst ITG surface = s={itg_s[worst_itg_idx]:.2f} ({itg_vals[worst_itg_idx]:.6e})")
+        for s_itg, val_itg in zip(itg_s, itg_vals):
+            print(f"    ITG @ s={s_itg:.2f}: {val_itg:.6e}")
+
+        if args.ae:
+            ae_surfaces = np.array(
+                [max(0.01, min(0.99, float(s))) for s in args.ae_surfaces],
+                dtype=float,
             )
-        except Exception as e:
-            print(f"  [Failed] {e}")
+            ae_surfaces = np.unique(ae_surfaces)
+            print(f"\n  Available Energy (gradient-dependent reference diagnostic)")
+            try:
+                ae_info = ae_diagnostics(
+                    vmec, s_vals=ae_surfaces,
+                    omn=args.ae_omn, omt=args.ae_omt,
+                    n_alpha=min(args.num_alpha, 4),
+                    n_turns=3, lam_res=200, gridpoints=512,
+                    verbose=False,
+                )
+                ae_s, ae_vals = _sorted_surface_dict({
+                    k: v for k, v in ae_info.items() if k != "total"
+                })
+                if np.any(np.isfinite(ae_vals)):
+                    worst_ae_idx = int(np.nanargmax(ae_vals))
+                    print(
+                        f"  Mean AE         = {ae_info['total']:.6e}\n"
+                        f"  Worst AE surface = s={ae_s[worst_ae_idx]:.2f} ({ae_vals[worst_ae_idx]:.6e})"
+                    )
+                for s_ae, val_ae in zip(ae_s, ae_vals):
+                    print(f"    AE @ s={s_ae:.2f}: {val_ae:.6e}")
+            except Exception as e:
+                print(f"  [AE failed] {e}")
+        else:
+            print("  AE skipped. Use --ae to include TEM-oriented diagnostics.")
+
+    well_grade = _grade_well(well_depth)
+    verdict = _overall_verdict(sanity, qi_grade, maxj_grade, ripple_grade)
+    notes = _main_issue_summary(info, ripple_results=eps_eff_results,
+                                itg_info=itg_info, ae_info=ae_info)
+
+    print(f"\n--- Diagnostic Summary ---")
+    print(f"  Overall verdict = {verdict}")
+    print(f"  Core grades     = QI:{qi_grade}, max-J:{maxj_grade}, ripple:{ripple_grade}, well:{well_grade}")
+    if sanity['status'] != 'OK':
+        print(f"  Sanity status    = {sanity['status']}")
+    for note in notes:
+        print(f"  Note            = {note}")
 
     # Plots
     if args.plot:
@@ -400,25 +804,46 @@ def main():
         fig1.savefig("boozer_surface.png", dpi=150, bbox_inches="tight")
         print("  Saved: boozer_surface.png")
 
-        fig2 = plot_squash_stretch(vmec, s_val=0.5, alpha=0.0)
-        fig2.savefig("squash_stretch.png", dpi=150, bbox_inches="tight")
-        print("  Saved: squash_stretch.png")
+        fig2 = plot_squid_core_diagnostics(
+            info,
+            metadata=dict(
+                num_surfaces=len(s_vals),
+                num_alpha=args.num_alpha,
+                num_pitch=args.num_pitch,
+            ),
+        )
+        fig2.savefig("squid_core_diagnostics.png", dpi=150, bbox_inches="tight")
+        print("  Saved: squid_core_diagnostics.png")
 
-        fig3 = plot_gradient_diagnostics(vmec, s_vals=s_vals,
-                                         num_alpha=args.num_alpha,
-                                         num_pitch=args.num_pitch)
-        if fig3 is not None:
-            fig3.savefig("gradient_diagnostics.png", dpi=150, bbox_inches="tight")
-            print("  Saved: gradient_diagnostics.png")
+        if run_extended:
+            fig_ext = plot_transport_diagnostics(
+                itg_info=itg_info,
+                ae_info=ae_info,
+                itg_method=args.itg_method,
+                metadata=dict(
+                    itg_surfaces=",".join(f"{s:.2f}" for s in itg_surfaces),
+                    ae_surfaces=",".join(f"{s:.2f}" for s in ae_surfaces) if args.ae else "off",
+                ),
+            )
+            if fig_ext is not None:
+                fig_ext.savefig("transport_diagnostics.png", dpi=150, bbox_inches="tight")
+                print("  Saved: transport_diagnostics.png")
 
         print("  Computing J contour polar plot (Fig. 9) ...")
-        fig4 = plot_J_contours(vmec, lambda_N=0.3)
-        fig4.savefig("j_contours_polar.png", dpi=150, bbox_inches="tight")
+        fig3 = plot_J_contours(vmec, lambda_N=0.3)
+        fig3.savefig("j_contours_polar.png", dpi=150, bbox_inches="tight")
         print("  Saved: j_contours_polar.png")
 
         try:
-            fig5 = plot_axis_geometry(vmec)
-            fig5.savefig("axis_geometry.png", dpi=150, bbox_inches="tight")
+            if ax_info is None:
+                raise RuntimeError("axis geometry unavailable")
+            fig4 = _plot_axis_geometry_summary(
+                ax_info,
+                mercier_data=mercier_data,
+                well_data=well_data,
+                ripple_results=eps_eff_results,
+            )
+            fig4.savefig("axis_geometry.png", dpi=150, bbox_inches="tight")
             print("  Saved: axis_geometry.png")
         except Exception as e:
             print(f"  [axis_geometry plot failed: {e}]")

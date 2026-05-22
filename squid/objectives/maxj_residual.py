@@ -17,6 +17,7 @@ from simsopt._core import Optimizable
 
 from ..core.boozer_utils import run_boozer, reconstruct_B
 from ..core.squash_stretch import squash_and_stretch_simple
+from .penalties import bmin_slope_residuals
 
 
 class MaxJResidual(Optimizable):
@@ -45,6 +46,7 @@ class MaxJResidual(Optimizable):
         self._iota_edge = 0.0
         self._B_min = 0.0
         self._B_max = 0.0
+        self._residuals = np.zeros(1)
 
     def _compute(self):
         try:
@@ -66,12 +68,13 @@ class MaxJResidual(Optimizable):
         self._iota_edge = info["iota_edge"]
         self._B_min = info["B_min"]
         self._B_max = info["B_max"]
+        self._residuals = info["maxj_residuals"]
         self._cache_x = cx
 
     def residuals(self):
-        """1-D residual for LeastSquaresProblem."""
+        """Resolution-normalised max-J residual vector."""
         self._compute()
-        return np.array([np.sqrt(max(self._f_maxJ, 0.0))])
+        return self._residuals
 
     def total(self):
         self._compute()
@@ -188,13 +191,18 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
     iota_edge = float(vmec_iotaf[-1])
 
     all_bs, all_jc, all_ji = [], [], []
+    surface_Bmin, surface_Bmax = [], []
     global_Bmin, global_Bmax = 1e30, -1e30
 
     for k in range(ns):
         data = surface_data[k]
-        global_Bmin = min(global_Bmin, data["B_min"])
-        global_Bmax = max(global_Bmax, data["B_max"])
-        B_stars = np.linspace(data["B_min"], data["B_max"], np_ + 2)[1:-1]
+        B_min = float(data["B_min"])
+        B_max = float(data["B_max"])
+        surface_Bmin.append(B_min)
+        surface_Bmax.append(B_max)
+        global_Bmin = min(global_Bmin, B_min)
+        global_Bmax = max(global_Bmax, B_max)
+        B_stars = np.linspace(B_min, B_max, np_ + 2)[1:-1]
         jc_rows, ji_rows = [], []
         for alpha in alphas:
             zeta, B_I = _extract_field_line(data, alpha)
@@ -214,8 +222,14 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
     b_hi = min(b[-1] for b in all_bs)
     if b_lo >= b_hi:
         return dict(f_maxJ=1e6, f_QI=1e6, mirror_ratio=mirror_ratio,
+                    f_maxJ_raw=1e6, f_QI_raw=1e6,
+                    maxj_residuals=np.array([1e3]),
+                    qi_residuals=np.array([1e3]),
+                    bmin_residuals=np.array([1e3]),
                     iota_axis=iota_axis, iota_edge=iota_edge,
-                    B_min=global_Bmin, B_max=global_Bmax)
+                    B_min=global_Bmin, B_max=global_Bmax,
+                    surface_Bmin=np.asarray(surface_Bmin),
+                    surface_Bmax=np.asarray(surface_Bmax))
 
     common_B = np.linspace(b_lo, b_hi, np_)
     JC_int, JI_int = [], []
@@ -229,7 +243,7 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
         JI_int.append(ji_k)
 
     # f_maxJ (Eqs. 6-7)
-    f_maxJ = 0.0
+    maxj_chunks = []
     for k in range(ns - 1):
         ds = s_vals[k + 1] - s_vals[k]
         J_lo, J_hi = JC_int[k], JC_int[k + 1]
@@ -238,20 +252,37 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
             denom = 1e-30
         diff = J_hi[:, :, None] - J_lo[:, None, :]
         mean_dJ = (diff / (ds * denom)).mean(axis=-1)
-        penalty = np.maximum(0.0, mean_dJ - T_J) ** 2
-        f_maxJ += float(penalty.sum())
+        maxj_chunks.append(np.maximum(0.0, mean_dJ - T_J).ravel())
+    maxj_raw_residuals = (
+        np.concatenate(maxj_chunks) if maxj_chunks else np.zeros(0)
+    )
+    maxj_residuals = maxj_raw_residuals / np.sqrt(max(maxj_raw_residuals.size, 1))
 
     # f_QI (Eq. 5)
-    f_QI = 0.0
+    qi_chunks = []
     for k in range(ns):
         denom = float(np.mean(JI_int[k] + JC_int[k]))
         if abs(denom) < 1e-30:
             denom = 1e-30
         diff = JI_int[k][:, :, None] - JC_int[k][:, None, :]
-        f_QI += float(np.sum((diff / denom) ** 2))
+        qi_chunks.append((diff / denom).ravel())
+    qi_raw_residuals = np.concatenate(qi_chunks) if qi_chunks else np.zeros(0)
+    qi_residuals = qi_raw_residuals / np.sqrt(max(qi_raw_residuals.size, 1))
+
+    bmin_residuals = bmin_slope_residuals(s_vals, surface_Bmin)
 
     return dict(
-        f_maxJ=f_maxJ, f_QI=f_QI, mirror_ratio=mirror_ratio,
+        f_maxJ=float(np.sum(maxj_residuals ** 2)),
+        f_QI=float(np.sum(qi_residuals ** 2)),
+        f_Bmin=float(np.sum(bmin_residuals ** 2)),
+        f_maxJ_raw=float(np.sum(maxj_raw_residuals ** 2)),
+        f_QI_raw=float(np.sum(qi_raw_residuals ** 2)),
+        maxj_residuals=maxj_residuals,
+        qi_residuals=qi_residuals,
+        bmin_residuals=bmin_residuals,
+        mirror_ratio=mirror_ratio,
         iota_axis=iota_axis, iota_edge=iota_edge,
         B_min=global_Bmin, B_max=global_Bmax,
+        surface_Bmin=np.asarray(surface_Bmin),
+        surface_Bmax=np.asarray(surface_Bmax),
     )

@@ -1,0 +1,28 @@
+{
+  "name": "core_baseline",
+  "mode": "core",
+  "nc_file": "artifacts/legacy_root/wout_squid_optimized.nc",
+  "backend": "vmec",
+  "numerics": {
+    "maxiter": 10,
+    "max_dofs": 12,
+    "num_alpha": 4,
+    "num_pitch": 20,
+    "num_surfaces": 3,
+    "ns_vmec": 31,
+    "abs_step": 1e-4
+  },
+  "weights": {
+    "w_qi": 1.0,
+    "w_qi_r2": 0.0,
+    "w_maxj": 1.0,
+    "w_bmin": 1.0,
+    "w_ar": 100.0,
+    "w_reg": 10.0
+  },
+  "targets": {
+    "bmin_slope_target": 0.01,
+    "mirror_target": 0.20,
+    "iota_tolerance": 0.01
+  }
+}

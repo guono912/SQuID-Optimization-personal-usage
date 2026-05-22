@@ -11,6 +11,10 @@ input.squid_*
 
 # ignore old code reference
 old_archive/
+artifacts/legacy_root/
+artifacts/old_archive/
+runs/*
+!runs/README.md
 
 # VMEC/SQuID 产生的临时文件
 fort.*

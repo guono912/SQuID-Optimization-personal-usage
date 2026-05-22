@@ -11,84 +11,35 @@ import glob
 import tempfile
 import numpy as np
 
-from simsopt.mhd import Vmec, Boozer
+from simsopt.mhd import Vmec
 
 from ..objectives.maxj_residual import _evaluate_squid
-from ..objectives.penalties import hinge_loss
+from ..objectives.qi_residual import compute_qi_residual_r2
+from ..objectives.itg_residual import ITGResidual
+from ..objectives.penalties import bmin_slope_residuals, hinge_loss
+
+
+INVALID_OBJECTIVE = 1.0e6
+INVALID_TOTAL = 1.0e10
 
 
 def _compute_mirror_penalty(mirror_ratio, mirror_target):
-    return hinge_loss(mirror_target - mirror_ratio, 0.0)
+    """Penalise mirror ratio above the configured upper bound."""
+    return hinge_loss(mirror_ratio, mirror_target)
 
 
-def _compute_iota_penalty(iota_axis, iota_edge, iota_ax_target, iota_edge_target):
-    return (iota_axis - iota_ax_target) ** 2 + (iota_edge - iota_edge_target) ** 2
+def _compute_beta_penalty(beta, beta_target):
+    """Penalise total beta above the configured upper bound."""
+    if not np.isfinite(beta):
+        return INVALID_OBJECTIVE
+    return hinge_loss(beta, beta_target)
 
 
-def _compute_f_grad_s(vmec_ro, s_targets, nu=80, nv=80):
-    """Vacuum-proxy ITG target."""
-    wout = vmec_ro.wout
-    ns = int(wout.ns)
-    nfp = int(wout.nfp)
-    xm = np.ravel(np.array(wout.xm, dtype=int))
-    xn = np.ravel(np.array(wout.xn, dtype=int))
-    xm_nyq = np.ravel(np.array(wout.xm_nyq, dtype=int))
-    xn_nyq = np.ravel(np.array(wout.xn_nyq, dtype=int))
-    rmnc = np.array(wout.rmnc)
-    zmns = np.array(wout.zmns)
-    bmnc = np.array(wout.bmnc)
-    gmnc = np.array(wout.gmnc)
-    a_min = float(wout.Aminor_p)
-
-    theta = np.linspace(0, 2 * np.pi, nu, endpoint=False)
-    zeta = np.linspace(0, 2 * np.pi / nfp, nv, endpoint=False)
-    th, ze = np.meshgrid(theta, zeta, indexing="ij")
-
-    m_geom = xm[:, None, None]
-    n_geom = xn[:, None, None]
-    ang_geom = m_geom * th[None, :, :] - n_geom * ze[None, :, :]
-    cos_geom = np.cos(ang_geom)
-    sin_geom = np.sin(ang_geom)
-
-    m_nyq = xm_nyq[:, None, None]
-    n_nyq = xn_nyq[:, None, None]
-    ang_nyq = m_nyq * th[None, :, :] - n_nyq * ze[None, :, :]
-    cos_nyq = np.cos(ang_nyq)
-
-    s_grid = np.linspace(0, 1, ns)
-
-    def _rg(fmnc, k):
-        return np.sum(fmnc[:, k][:, None, None] * cos_geom, axis=0)
-
-    def _rn(fmnc, k):
-        return np.sum(fmnc[:, k][:, None, None] * cos_nyq, axis=0)
-
-    f_total = 0.0
-    for s_t in s_targets:
-        js = int(np.argmin(np.abs(s_grid - s_t)))
-        js = max(1, min(js, ns - 2))
-        ds = s_grid[js + 1] - s_grid[js - 1]
-        R = _rg(rmnc, js)
-        R_u = np.sum(-m_geom * rmnc[:, js][:, None, None] * sin_geom, axis=0)
-        R_v = np.sum(n_geom * rmnc[:, js][:, None, None] * sin_geom, axis=0)
-        Z_u = np.sum(m_geom * zmns[:, js][:, None, None] * cos_geom, axis=0)
-        Z_v = np.sum(-n_geom * zmns[:, js][:, None, None] * cos_geom, axis=0)
-        sqrtg = _rn(gmnc, js)
-        sqrtg = np.where(np.abs(sqrtg) < 1e-30, 1e-30, sqrtg)
-        cross_sq = R ** 2 * (R_u ** 2 + Z_u ** 2) + (Z_u * R_v - R_u * Z_v) ** 2
-        grad_s = np.sqrt(np.maximum(cross_sq / sqrtg ** 2, 1e-30))
-        dBds = (_rn(bmnc, js + 1) - _rn(bmnc, js - 1)) / ds
-        bad_mask = np.where(dBds < 0, 1.0, 0.0)
-        xi = (a_min * bad_mask * grad_s) ** 2
-        xi_pos = xi[xi > 0]
-        if len(xi_pos) == 0:
-            continue
-        xi_95 = float(np.percentile(xi_pos, 95))
-        integrand = xi * np.maximum(xi_95 - xi, 0.0)
-        dth = 2 * np.pi / nu
-        dze = 2 * np.pi / (nfp * nv)
-        f_total += float(np.sum(integrand)) * dth * dze
-    return f_total
+def _compute_iota_penalty(iota_axis, iota_edge, iota_ax_target,
+                          iota_edge_target, tolerance=0.01):
+    axis_penalty = hinge_loss(abs(iota_axis - iota_ax_target), tolerance)
+    edge_penalty = hinge_loss(abs(iota_edge - iota_edge_target), tolerance)
+    return axis_penalty + edge_penalty
 
 
 def run_desc(args):
@@ -179,7 +130,7 @@ def run_desc(args):
                 eq.solve(verbose=0, ftol=1e-6, maxiter=50)
             except Exception as exc:
                 print(f"    [#{n_eval[0]}] solve failed: {exc}")
-                return 1e10
+                return INVALID_TOTAL
         first_eval[0] = False
 
         try:
@@ -188,7 +139,7 @@ def run_desc(args):
             vmec_ro.run()
         except Exception as exc:
             print(f"    [#{n_eval[0]}] VMEC load failed: {exc}")
-            return 1e10
+            return INVALID_TOTAL
 
         try:
             info = _evaluate_squid(
@@ -197,10 +148,33 @@ def run_desc(args):
             )
         except Exception as exc:
             print(f"    [#{n_eval[0]}] SQuID failed: {exc}")
-            return 1e10
+            return INVALID_TOTAL
 
         f_maxJ = info["f_maxJ"]
         f_QI = info["f_QI"]
+        try:
+            bmin_residuals = bmin_slope_residuals(
+                s_vals, info["surface_Bmin"], args.bmin_slope_target)
+            f_Bmin = float(np.sum(bmin_residuals ** 2))
+        except Exception as exc:
+            print(f"    [#{n_eval[0]}] B_min target failed: {exc}")
+            f_Bmin = INVALID_OBJECTIVE
+        f_QI_R2 = 0.0
+        if args.w_qi_r2 > 0:
+            try:
+                _, qi_r2_residuals = compute_qi_residual_r2(
+                    vmec_ro, s_vals,
+                    nphi=args.qi_r2_nphi,
+                    nalpha=args.qi_r2_nalpha,
+                    nBj=args.qi_r2_nbj,
+                    mpol=args.qi_r2_mpol,
+                    ntor=args.qi_r2_ntor,
+                    arr_out=args.qi_r2_arr_out,
+                )
+                f_QI_R2 = float(np.sum(qi_r2_residuals ** 2))
+            except Exception as exc:
+                print(f"    [#{n_eval[0]}] R2 QI target failed: {exc}")
+                f_QI_R2 = INVALID_OBJECTIVE
         delta = info["mirror_ratio"]
         iota_ax = info["iota_axis"]
         iota_ed = info["iota_edge"]
@@ -210,6 +184,11 @@ def run_desc(args):
         except Exception:
             A = args.aspect_target
 
+        try:
+            beta = float(vmec_ro.wout.betatotal)
+        except Exception:
+            beta = np.inf
+
         if not iota_targets_set[0]:
             if args.iota_ax is None:
                 args.iota_ax = round(iota_ax, 3)
@@ -218,33 +197,50 @@ def run_desc(args):
             iota_targets_set[0] = True
 
         f_mirror = _compute_mirror_penalty(delta, args.mirror_target)
+        f_beta = _compute_beta_penalty(beta, args.beta_target)
         f_iota = _compute_iota_penalty(iota_ax, iota_ed,
-                                       args.iota_ax, args.iota_edge)
+                                       args.iota_ax, args.iota_edge,
+                                       args.iota_tolerance)
 
-        try:
-            f_gs = _compute_f_grad_s(vmec_ro, s_grad)
-        except Exception:
-            f_gs = 0.0
+        f_gs = 0.0
+        if getattr(args, 'w_grad_s', 0.0) > 0:
+            try:
+                f_gs = ITGResidual(
+                    vmec_ro, s_grad, method=args.itg_method).total()
+            except Exception as exc:
+                print(f"    [#{n_eval[0]}] ITG target failed: {exc}")
+                f_gs = INVALID_OBJECTIVE
 
         f_reg = float(np.sum((x - x0) ** 2))
 
         total = (args.w_maxj * f_maxJ
                  + args.w_qi * f_QI
-                 + args.w_ar * (A - args.aspect_target) ** 2
+                 + args.w_qi_r2 * f_QI_R2
+                 + args.w_bmin * f_Bmin
+                 + args.w_ar * hinge_loss(A, args.aspect_target)
                  + args.w_mirror * f_mirror
+                 + args.w_beta * f_beta
                  + args.w_iota * f_iota
                  + args.w_grad_s * f_gs
                  + args.w_reg * f_reg)
 
         dt = time.time() - t0
-        print(f"    [#{n_eval[0]}]  f_maxJ={f_maxJ:.3e}  f_QI={f_QI:.3e}  "
-              f"A={A:.2f}  delta={delta:.4f}  "
-              f"iota=[{iota_ax:.3f},{iota_ed:.3f}]  "
-              f"f_nabla_s={f_gs:.2e}  total={total:.3e}  ({dt:.1f}s)")
+        parts = [f"f_maxJ={f_maxJ:.3e}", f"f_QI={f_QI:.3e}",
+                 f"f_Bmin={f_Bmin:.3e}",
+                 f"A={A:.2f}", f"delta={delta:.4f}",
+                 f"iota=[{iota_ax:.3f},{iota_ed:.3f}]",
+                 f"beta={beta:.4f}"]
+        if getattr(args, 'w_grad_s', 0.0) > 0:
+            parts.append(f"f_nabla_s={f_gs:.2e}")
+        if args.w_qi_r2 > 0:
+            parts.append(f"f_QI_R2={f_QI_R2:.3e}")
+        parts.extend([f"total={total:.3e}", f"({dt:.1f}s)"])
+        print(f"    [#{n_eval[0]}]  {'  '.join(parts)}")
         history.append(dict(
-            f_maxJ=f_maxJ, f_QI=f_QI, A=A, total=total,
+            f_maxJ=f_maxJ, f_QI=f_QI, f_QI_R2=f_QI_R2,
+            f_Bmin=f_Bmin, A=A, total=total,
             mirror=delta, iota_ax=iota_ax, iota_ed=iota_ed,
-            f_mirror=f_mirror, f_iota=f_iota,
+            beta=beta, f_mirror=f_mirror, f_beta=f_beta, f_iota=f_iota,
             f_grad_s=f_gs, f_reg=f_reg,
             B_min=info["B_min"], B_max=info["B_max"],
         ))
@@ -253,16 +249,19 @@ def run_desc(args):
     print(f"\n  Evaluating initial state ...")
     obj0 = objective(x0)
 
-    print(f"\n  Starting Nelder-Mead (maxiter={args.maxiter}) ...")
-    t_start = time.time()
-    result = minimize(
-        objective, x0, method="Nelder-Mead",
-        options=dict(maxiter=args.maxiter, xatol=1e-5, fatol=1e-4, adaptive=True),
-    )
-    t_total = time.time() - t_start
+    if args.maxiter > 0:
+        print(f"\n  Starting Nelder-Mead (maxiter={args.maxiter}) ...")
+        t_start = time.time()
+        result = minimize(
+            objective, x0, method="Nelder-Mead",
+            options=dict(maxiter=args.maxiter, xatol=1e-5, fatol=1e-4, adaptive=True),
+        )
+        t_total = time.time() - t_start
 
-    print(f"\n  Finished in {t_total / 60:.1f} min  ({n_eval[0]} evals)")
-    print(f"  Optimizer message: {result.message}")
+        print(f"\n  Finished in {t_total / 60:.1f} min  ({n_eval[0]} evals)")
+        print(f"  Optimizer message: {result.message}")
+    else:
+        print("\n  maxiter <= 0: initial evaluation only; optimisation skipped.")
 
     if history:
         h0, hf = history[0], history[-1]

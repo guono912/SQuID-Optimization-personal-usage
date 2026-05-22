@@ -26,15 +26,68 @@ def hinge_loss(x, x_target):
     return max(0.0, x - x_target) ** 2
 
 
+def bmin_slope_penalty(s_vals, bmins, target_slope=0.01):
+    """
+    Penalise insufficient outward growth of the flux-surface minimum |B|.
+
+    Goodman et al. use this as the simple deeply/shallowly trapped
+    maximum-J auxiliary target:
+
+        delta_B = (Bmin(s1) - Bmin(s0)) / (ds * (Bmin(s1) + Bmin(s0)))
+        f_Bmin = max(target_slope - delta_B, 0)^2
+
+    The default target_slope follows the proof-of-principle value used in
+    the maximum-J QI optimisation paper.
+    """
+    s_vals = np.asarray(s_vals, dtype=float)
+    bmins = np.asarray(bmins, dtype=float)
+    if s_vals.ndim != 1 or bmins.ndim != 1 or len(s_vals) != len(bmins):
+        raise ValueError("s_vals and bmins must be 1-D arrays of equal length")
+    if not (np.all(np.isfinite(s_vals)) and np.all(np.isfinite(bmins))):
+        raise ValueError("s_vals and bmins must be finite")
+    residuals = bmin_slope_residuals(s_vals, bmins, target_slope)
+    return float(np.sum(residuals ** 2))
+
+
+def bmin_slope_residuals(s_vals, bmins, target_slope=0.01):
+    """
+    Resolution-normalised residual vector for the B_min radial-growth target.
+
+    Each adjacent radial interval contributes one residual. The vector is
+    divided by sqrt(Nintervals), so the squared norm is an interval-averaged
+    penalty rather than a grid-size-dependent sum.
+    """
+    s_vals = np.asarray(s_vals, dtype=float)
+    bmins = np.asarray(bmins, dtype=float)
+    if s_vals.ndim != 1 or bmins.ndim != 1 or len(s_vals) != len(bmins):
+        raise ValueError("s_vals and bmins must be 1-D arrays of equal length")
+    if not (np.all(np.isfinite(s_vals)) and np.all(np.isfinite(bmins))):
+        raise ValueError("s_vals and bmins must be finite")
+    if len(s_vals) < 2:
+        return np.zeros(0)
+
+    residuals = []
+    for s0, s1, b0, b1 in zip(s_vals[:-1], s_vals[1:], bmins[:-1], bmins[1:]):
+        ds = float(s1 - s0)
+        denom = float(b1 + b0)
+        if ds <= 0 or abs(denom) < 1e-30:
+            residuals.append(1.0e3)
+            continue
+        delta_b = (float(b1 - b0) / ds) / denom
+        residuals.append(max(target_slope - delta_b, 0.0))
+    residuals = np.asarray(residuals, dtype=float)
+    return residuals / np.sqrt(max(residuals.size, 1))
+
+
 # ===================================================================
 #  Mirror ratio
 # ===================================================================
 
 class MirrorRatioPenalty(Optimizable):
     """
-    Penalise when the mirror ratio drops BELOW *target*.
+    Penalise when the mirror ratio exceeds *target*.
 
-    f_Delta = max(0, target - Delta)^2
+    f_Delta = max(0, Delta - target)^2
     where Delta = (Bmax - Bmin) / (Bmax + Bmin).
     """
 
@@ -62,11 +115,11 @@ class MirrorRatioPenalty(Optimizable):
 
     def residuals(self):
         delta = self._delta()
-        return np.array([np.sqrt(hinge_loss(self.target - delta, 0.0))])
+        return np.array([np.sqrt(hinge_loss(delta, self.target))])
 
     def total(self):
         delta = self._delta()
-        return hinge_loss(self.target - delta, 0.0)
+        return hinge_loss(delta, self.target)
 
 
 # ===================================================================
@@ -145,16 +198,18 @@ class IotaPenalty(Optimizable):
 
 class IotaProfilePenalty(Optimizable):
     """
-    Soft quadratic penalty on axis and edge iota.
+    Tolerance hinge penalty on axis and edge iota.
 
-    f_iota = (iota_axis - target_axis)^2 + (iota_edge - target_edge)^2
+    f_iota = M_t(|iota_axis - target_axis|, tol)
+           + M_t(|iota_edge - target_edge|, tol)
     """
 
-    def __init__(self, vmec, target_axis=None, target_edge=None):
+    def __init__(self, vmec, target_axis=None, target_edge=None, tolerance=0.01):
         super().__init__(depends_on=[vmec])
         self.vmec = vmec
         self.target_axis = target_axis
         self.target_edge = target_edge
+        self.tolerance = tolerance
         self._auto_detected = False
 
     def _auto_detect(self):
@@ -174,8 +229,8 @@ class IotaProfilePenalty(Optimizable):
         iotaf = self.vmec.wout.iotaf
         iota_ax = float(iotaf[0])
         iota_ed = float(iotaf[-1])
-        r1 = iota_ax - self.target_axis
-        r2 = iota_ed - self.target_edge
+        r1 = np.sqrt(hinge_loss(abs(iota_ax - self.target_axis), self.tolerance))
+        r2 = np.sqrt(hinge_loss(abs(iota_ed - self.target_edge), self.tolerance))
         return np.array([r1, r2])
 
     def total(self):

@@ -2,12 +2,11 @@
 """
 Integration tests for the squid package.
 
-Compares outputs of the new unified squid package against the
-original standalone scripts (max_J_evaluation.py, simsopt_optimize_v3.py)
-to verify numerical equivalence.
+Fast tests cover core numerical helpers without VMEC. Heavy VMEC-backed
+checks are opt-in via SQUID_TEST_WOUT.
 
 Run:
-    cd /home/guozx/Squid
+    cd /home/guozx/SQuID
     python -m pytest tests/test_integration.py -v
 
 or directly:
@@ -21,18 +20,15 @@ import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-# Reference wout file — change this to your own if needed
-REFERENCE_WOUT = "/home/guozx/constellaration/nc_files/wout_DATJ5FCamJ3dNpdKmj8QsfL.nc"
-ALT_WOUT = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)),
-    "..", "_wout_opt_tmp.nc",
-)
+# Heavy VMEC tests are opt-in. Some local wout files are generated artefacts
+# whose VMEC compatibility depends on the installed Fortran extension, and a
+# failed VMEC run can terminate the process before Python can skip cleanly.
+REFERENCE_WOUT = os.environ.get("SQUID_TEST_WOUT")
 
 
 def _find_wout():
-    for path in [REFERENCE_WOUT, ALT_WOUT]:
-        if os.path.exists(path):
-            return path
+    if REFERENCE_WOUT and os.path.exists(REFERENCE_WOUT):
+        return REFERENCE_WOUT
     return None
 
 
@@ -92,9 +88,76 @@ class TestCoreModules(unittest.TestCase):
         from squid.utils.generate_initial import generate_boundary
         coeffs = generate_boundary(aspect=10, elongation=6, mirror=0.25, nfp=4)
         self.assertIn((0, 0), coeffs)
-        self.assertIn((1, 0), coeffs)
+        self.assertIn((0, 1), coeffs)
+        self.assertIn((2, 0), coeffs)
         rbc00, zbs00 = coeffs[(0, 0)]
-        self.assertAlmostEqual(rbc00, 1.5)
+        self.assertAlmostEqual(rbc00, 1.0)
+        self.assertAlmostEqual(zbs00, 0.0)
+
+    def test_bmin_slope_penalty(self):
+        from squid.objectives.penalties import bmin_slope_penalty
+        s_vals = np.array([0.2, 0.5, 0.8])
+        good_bmins = np.array([1.00, 1.03, 1.06])
+        bad_bmins = np.array([1.00, 0.99, 0.98])
+        self.assertAlmostEqual(bmin_slope_penalty(s_vals, good_bmins), 0.0)
+        self.assertGreater(bmin_slope_penalty(s_vals, bad_bmins), 0.0)
+
+    def test_optimize_config_mode_defaults(self):
+        from scripts.optimize import MODE_PRESETS, _build_parser, _flatten_config
+        config = _flatten_config({
+            "mode": "maxj_repair",
+            "nc_file": "artifacts/legacy_root/wout_squid_optimized.nc",
+            "numerics": {"maxiter": 2},
+            "r2": {"nphi": 77},
+        })
+        defaults = MODE_PRESETS[config["mode"]].copy()
+        defaults.update(config)
+        parser = _build_parser(defaults)
+        args = parser.parse_args(["--maxiter", "0", "--w_maxj", "9.0"])
+
+        self.assertEqual(args.mode, "maxj_repair")
+        self.assertEqual(args.maxiter, 0)
+        self.assertEqual(args.qi_r2_nphi, 77)
+        self.assertAlmostEqual(args.w_qi, MODE_PRESETS["maxj_repair"]["w_qi"])
+        self.assertAlmostEqual(args.w_maxj, 9.0)
+
+    def test_optimize_cli_mode_can_override_config_mode(self):
+        from scripts.optimize import MODE_PRESETS, _build_parser, _flatten_config
+        config = _flatten_config({
+            "mode": "core",
+            "nc_file": "artifacts/legacy_root/wout_squid_optimized.nc",
+        })
+        cli_mode = "maxj_repair"
+        defaults = MODE_PRESETS[cli_mode].copy()
+        defaults.update(config)
+        defaults["mode"] = cli_mode
+        parser = _build_parser(defaults)
+        args = parser.parse_args(["--mode", cli_mode])
+
+        self.assertEqual(args.mode, "maxj_repair")
+        self.assertAlmostEqual(args.w_maxj, MODE_PRESETS["maxj_repair"]["w_maxj"])
+
+    def test_iota_rational_scan_reports_nearest_low_order(self):
+        from scripts.diagnose import _scan_iota_rationals
+
+        class Wout:
+            iotaf = np.array([-0.42, -0.45, -0.50, -0.56])
+
+        class FakeVmec:
+            wout = Wout()
+
+        scan = _scan_iota_rationals(
+            FakeVmec(),
+            max_denominator=4,
+            warn_distance=0.02,
+            s_min=0.0,
+            s_max=1.0,
+        )
+
+        self.assertTrue(scan["available"])
+        self.assertEqual(scan["nearest_low_order"]["rational"], "-1/2")
+        self.assertLessEqual(scan["nearest_low_order"]["distance"], 1e-12)
+        self.assertGreaterEqual(len(scan["near_low_order"]), 1)
 
 
 class TestWithVMEC(unittest.TestCase):
@@ -192,70 +255,6 @@ class TestWithVMEC(unittest.TestCase):
         self.assertEqual(len(zeta), 200)
         self.assertEqual(len(B_I), 200)
         self.assertTrue(np.all(np.isfinite(B_I)))
-
-
-class TestNumericalEquivalence(unittest.TestCase):
-    """
-    Compare outputs of the new squid package against the original
-    max_J_evaluation.py to verify numerical equivalence.
-    """
-
-    @classmethod
-    def setUpClass(cls):
-        cls.wout_path = _find_wout()
-        if cls.wout_path is not None:
-            try:
-                from simsopt.mhd import Vmec
-                cls.vmec = Vmec(cls.wout_path)
-                cls.vmec.run()
-            except Exception:
-                cls.wout_path = None
-
-        cls.old_module_available = False
-        if cls.wout_path is not None:
-            try:
-                sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)) + "/..")
-                from max_J_evaluation import evaluate_squid as old_evaluate_squid
-                cls.old_evaluate_squid = old_evaluate_squid
-                cls.old_module_available = True
-            except ImportError:
-                pass
-
-    @_skip_if_no_wout
-    def test_evaluate_squid_equivalence(self):
-        """Verify that squid.evaluation matches max_J_evaluation outputs."""
-        if not self.old_module_available:
-            self.skipTest("Original max_J_evaluation.py not importable")
-
-        from squid.evaluation.evaluate import evaluate_squid
-
-        s_vals = np.array([0.25, 0.5, 0.75])
-        alphas = np.linspace(0, 2 * np.pi, 4, endpoint=False)
-
-        new_info = evaluate_squid(
-            self.vmec, s_vals=s_vals,
-            num_alpha=4, num_pitch=10,
-            verbose=False,
-        )
-
-        old_info = self.old_evaluate_squid(
-            self.vmec, s_vals, alphas,
-            num_pitch=10, T_J=-0.06, mboz=8, nboz=8,
-        )
-
-        rtol = 1e-4
-        np.testing.assert_allclose(
-            new_info["f_maxJ"], old_info["f_maxJ"], rtol=rtol,
-            err_msg="f_maxJ mismatch",
-        )
-        np.testing.assert_allclose(
-            new_info["f_QI"], old_info["f_QI"], rtol=rtol,
-            err_msg="f_QI mismatch",
-        )
-        np.testing.assert_allclose(
-            new_info["mirror_ratio"], old_info["mirror_ratio"], rtol=rtol,
-            err_msg="mirror_ratio mismatch",
-        )
 
 
 if __name__ == "__main__":

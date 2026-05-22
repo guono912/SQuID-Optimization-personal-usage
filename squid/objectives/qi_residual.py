@@ -25,8 +25,7 @@ from ..core.squash_stretch import squash_and_stretch_r2
 # ===================================================================
 
 def compute_qi_residual_r2(vmec, snorms, nphi=601, nalpha=75, nBj=601,
-                           mpol=20, ntor=20, nphi_out=2000,
-                           arr_out=True):
+                           mpol=20, ntor=20, arr_out=True):
     """
     Compute the QI deviation on multiple flux surfaces using the R2
     (cosine-smooth stretch + shuffle) algorithm.
@@ -146,7 +145,10 @@ def compute_qi_residual_r2(vmec, snorms, nphi=601, nalpha=75, nBj=601,
             out[si, :] *= mean_denom
 
     out = out.flatten()
-    out = out / np.sqrt(nalpha)
+    # arr_out=True already divides each field-line trace by sqrt(nphi), so the
+    # remaining resolution normalisation is over (surface, alpha), matching the
+    # arr_out=False per-line RMS branch.
+    out = out / np.sqrt(max(ns * nalpha, 1))
     return Bp_arr, out
 
 
@@ -163,7 +165,7 @@ class QIResidual(Optimizable):
     """
 
     def __init__(self, vmec, snorms, nphi=601, nalpha=75, nBj=601,
-                 mpol=20, ntor=20, nphi_out=2000, arr_out=True):
+                 mpol=20, ntor=20, arr_out=True):
         super().__init__(depends_on=[vmec])
         self.vmec = vmec
         self.snorms = np.atleast_1d(snorms).tolist()
@@ -172,7 +174,6 @@ class QIResidual(Optimizable):
         self.nBj = nBj
         self.mpol = mpol
         self.ntor = ntor
-        self.nphi_out = nphi_out
         self.arr_out = arr_out
         self._cache_x = None
         self._residuals = None
@@ -186,8 +187,7 @@ class QIResidual(Optimizable):
             return
         _, self._residuals = compute_qi_residual_r2(
             self.vmec, self.snorms, self.nphi, self.nalpha,
-            self.nBj, self.mpol, self.ntor, self.nphi_out,
-            self.arr_out,
+            self.nBj, self.mpol, self.ntor, self.arr_out,
         )
         self._cache_x = cx
 

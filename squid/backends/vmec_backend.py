@@ -17,13 +17,17 @@ from simsopt.objectives import LeastSquaresProblem
 from simsopt.solve import least_squares_serial_solve
 
 from ..objectives.maxj_residual import _evaluate_squid
+from ..objectives.qi_residual import QIResidual
 from ..objectives.itg_residual import ITGResidual
-from ..objectives.penalties import hinge_loss
+from ..objectives.penalties import bmin_slope_residuals, hinge_loss
+
+
+INVALID_OBJECTIVE = 1.0e6
 
 
 def wout_to_input(wout_path, input_path, ns=31,
                   prescribed_iota_ax=None, prescribed_iota_edge=None,
-                  free_iota=False):
+                  free_iota=True):
     """Convert wout_*.nc to VMEC input file.
 
     Parameters
@@ -32,7 +36,7 @@ def wout_to_input(wout_path, input_path, ns=31,
         If True, use NCURR=1 with zero current so that the rotational
         transform is computed self-consistently from the boundary shape.
         The iota penalty in the optimizer then actively steers iota.
-        If False (default), use NCURR=0 with prescribed AI coefficients.
+        If False, use NCURR=0 with prescribed AI coefficients.
     prescribed_iota_ax, prescribed_iota_edge : float or None
         Only used when free_iota=False.  Sets a linear iota profile
         instead of fitting the iotaf from the wout file.
@@ -108,16 +112,23 @@ def wout_to_input(wout_path, input_path, ns=31,
         f.write("/\n")
 
 
-def _compute_mirror_penalty(mirror_ratio, mirror_target, mirror_max=None):
-    if mirror_max is not None:
-        pen_lo = hinge_loss(mirror_target - mirror_ratio, 0.0)
-        pen_hi = hinge_loss(mirror_ratio - mirror_max, 0.0)
-        return pen_lo + pen_hi
-    return (mirror_ratio - mirror_target) ** 2
+def _compute_mirror_penalty(mirror_ratio, mirror_target):
+    """Penalise mirror ratio above the configured upper bound."""
+    return hinge_loss(mirror_ratio, mirror_target)
 
 
-def _compute_iota_penalty(iota_axis, iota_edge, iota_ax_target, iota_edge_target):
-    return (iota_axis - iota_ax_target) ** 2 + (iota_edge - iota_edge_target) ** 2
+def _compute_beta_penalty(beta, beta_target):
+    """Penalise total beta above the configured upper bound."""
+    if not np.isfinite(beta):
+        return INVALID_OBJECTIVE
+    return hinge_loss(beta, beta_target)
+
+
+def _compute_iota_penalty(iota_axis, iota_edge, iota_ax_target,
+                          iota_edge_target, tolerance=0.01):
+    axis_penalty = hinge_loss(abs(iota_axis - iota_ax_target), tolerance)
+    edge_penalty = hinge_loss(abs(iota_edge - iota_edge_target), tolerance)
+    return axis_penalty + edge_penalty
 
 
 def _compute_well_penalty(vmec_ro, target_well):
@@ -135,73 +146,7 @@ def _compute_well_penalty(vmec_ro, target_well):
         well_depth = (vp_axis - vp_edge) / vp_axis
         return hinge_loss(target_well - well_depth, 0.0)
     except Exception:
-        return 0.0
-
-
-def _compute_f_grad_s(vmec_ro, s_targets, nu=80, nv=80):
-    """Vacuum-proxy ITG target (dB/ds < 0)."""
-    wout = vmec_ro.wout
-    ns = int(wout.ns)
-    nfp = int(wout.nfp)
-    xm = np.ravel(np.array(wout.xm, dtype=int))
-    xn = np.ravel(np.array(wout.xn, dtype=int))
-    xm_nyq = np.ravel(np.array(wout.xm_nyq, dtype=int))
-    xn_nyq = np.ravel(np.array(wout.xn_nyq, dtype=int))
-    rmnc = np.array(wout.rmnc)
-    zmns = np.array(wout.zmns)
-    bmnc = np.array(wout.bmnc)
-    gmnc = np.array(wout.gmnc)
-    a_min = float(wout.Aminor_p)
-
-    theta = np.linspace(0, 2 * np.pi, nu, endpoint=False)
-    zeta = np.linspace(0, 2 * np.pi / nfp, nv, endpoint=False)
-    th, ze = np.meshgrid(theta, zeta, indexing="ij")
-
-    m_geom = xm[:, None, None]
-    n_geom = xn[:, None, None]
-    ang_geom = m_geom * th[None, :, :] - n_geom * ze[None, :, :]
-    cos_geom = np.cos(ang_geom)
-    sin_geom = np.sin(ang_geom)
-
-    m_nyq = xm_nyq[:, None, None]
-    n_nyq = xn_nyq[:, None, None]
-    ang_nyq = m_nyq * th[None, :, :] - n_nyq * ze[None, :, :]
-    cos_nyq = np.cos(ang_nyq)
-
-    s_grid = np.linspace(0, 1, ns)
-
-    def _rg(fmnc, k):
-        return np.sum(fmnc[:, k][:, None, None] * cos_geom, axis=0)
-
-    def _rn(fmnc, k):
-        return np.sum(fmnc[:, k][:, None, None] * cos_nyq, axis=0)
-
-    f_total = 0.0
-    for s_t in s_targets:
-        js = int(np.argmin(np.abs(s_grid - s_t)))
-        js = max(1, min(js, ns - 2))
-        ds = s_grid[js + 1] - s_grid[js - 1]
-        R = _rg(rmnc, js)
-        R_u = np.sum(-m_geom * rmnc[:, js][:, None, None] * sin_geom, axis=0)
-        R_v = np.sum(n_geom * rmnc[:, js][:, None, None] * sin_geom, axis=0)
-        Z_u = np.sum(m_geom * zmns[:, js][:, None, None] * cos_geom, axis=0)
-        Z_v = np.sum(-n_geom * zmns[:, js][:, None, None] * cos_geom, axis=0)
-        sqrtg = _rn(gmnc, js)
-        sqrtg = np.where(np.abs(sqrtg) < 1e-30, 1e-30, sqrtg)
-        cross_sq = R ** 2 * (R_u ** 2 + Z_u ** 2) + (Z_u * R_v - R_u * Z_v) ** 2
-        grad_s = np.sqrt(np.maximum(cross_sq / sqrtg ** 2, 1e-30))
-        dBds = (_rn(bmnc, js + 1) - _rn(bmnc, js - 1)) / ds
-        bad_mask = np.where(dBds < 0, 1.0, 0.0)
-        xi = (a_min * bad_mask * grad_s) ** 2
-        xi_pos = xi[xi > 0]
-        if len(xi_pos) == 0:
-            continue
-        xi_95 = float(np.percentile(xi_pos, 95))
-        integrand = xi * np.maximum(xi_95 - xi, 0.0)
-        dth = 2 * np.pi / nu
-        dze = 2 * np.pi / (nfp * nv)
-        f_total += float(np.sum(integrand)) * dth * dze
-    return f_total
+        return INVALID_OBJECTIVE
 
 
 def run_vmec(args):
@@ -211,10 +156,12 @@ def run_vmec(args):
     input_path = os.path.join(
         os.path.dirname(os.path.abspath(args.nc_file)), "input.squid_init"
     )
-    free_iota = getattr(args, 'free_iota', False)
+    free_iota = getattr(args, 'free_iota', True)
     print(f"  Converting wout -> {input_path} ...")
     if free_iota:
         print("  Mode: NCURR=1 (iota self-consistent with boundary)")
+    else:
+        print("  Mode: NCURR=0 (iota prescribed by AI coefficients)")
     wout_to_input(args.nc_file, input_path, ns=args.ns_vmec,
                   prescribed_iota_ax=args.iota_ax,
                   prescribed_iota_edge=args.iota_edge,
@@ -226,7 +173,7 @@ def run_vmec(args):
     A0 = vmec.aspect()
     if args.aspect_target is None:
         args.aspect_target = round(A0, 1)
-    print(f"  Aspect: {A0:.2f}  (target {args.aspect_target})")
+    print(f"  Aspect: {A0:.2f}  (upper bound {args.aspect_target})")
 
     # --- DoFs ---
     surf = vmec.boundary
@@ -273,8 +220,13 @@ def run_vmec(args):
             self._cache_x = None
             self._fmaxj = 0.0
             self._fqi = 0.0
+            self._fbmin = 0.0
+            self._qi_residuals = np.zeros(1)
+            self._maxj_residuals = np.zeros(1)
+            self._bmin_residuals = np.zeros(1)
             self._fgs = 0.0
             self._mirror = 0.0
+            self._beta = 0.0
             self._iota_ax = 0.0
             self._iota_ed = 0.0
             self._well_depth = 0.0
@@ -297,20 +249,45 @@ def run_vmec(args):
                 )
             except Exception as exc:
                 print(f"    [SQuID #{self._n}] FAILED: {exc}")
-                info = dict(f_maxJ=1e6, f_QI=1e6, mirror_ratio=0.0,
+                info = dict(f_maxJ=INVALID_OBJECTIVE, f_QI=INVALID_OBJECTIVE,
+                            f_Bmin=INVALID_OBJECTIVE,
+                            qi_residuals=np.array([np.sqrt(INVALID_OBJECTIVE)]),
+                            maxj_residuals=np.array([np.sqrt(INVALID_OBJECTIVE)]),
+                            bmin_residuals=np.array([np.sqrt(INVALID_OBJECTIVE)]),
+                            mirror_ratio=0.0,
                             iota_axis=0.0, iota_edge=0.0,
-                            B_min=0.0, B_max=0.0)
+                            B_min=0.0, B_max=0.0,
+                            surface_Bmin=np.full_like(s_vals, np.nan))
             self._fmaxj = info["f_maxJ"]
             self._fqi = info["f_QI"]
+            self._fbmin = info.get("f_Bmin", 0.0)
+            self._qi_residuals = info["qi_residuals"]
+            self._maxj_residuals = info["maxj_residuals"]
+            try:
+                self._bmin_residuals = bmin_slope_residuals(
+                    s_vals, info["surface_Bmin"], args.bmin_slope_target)
+                self._fbmin = float(np.sum(self._bmin_residuals ** 2))
+            except Exception as exc:
+                print(f"    [SQuID #{self._n}] B_min target FAILED: {exc}")
+                self._fbmin = INVALID_OBJECTIVE
+                self._bmin_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
             self._mirror = info["mirror_ratio"]
             self._iota_ax = info["iota_axis"]
             self._iota_ed = info["iota_edge"]
 
+            if getattr(args, 'w_beta', 0.0) > 0:
+                try:
+                    self._beta = float(vmec.wout.betatotal)
+                except Exception:
+                    self._beta = np.inf
+
             if getattr(args, 'w_grad_s', 0.0) > 0:
                 try:
-                    self._fgs = _compute_f_grad_s(vmec, s_grad)
-                except Exception:
-                    self._fgs = 0.0
+                    self._fgs = ITGResidual(
+                        vmec, s_grad, method=args.itg_method).total()
+                except Exception as exc:
+                    print(f"    [SQuID #{self._n}] ITG target FAILED: {exc}")
+                    self._fgs = INVALID_OBJECTIVE
 
             if getattr(args, 'w_well', 0.0) > 0:
                 try:
@@ -320,14 +297,17 @@ def run_vmec(args):
                     self._well_depth = ((vp_ax - vp_ed) / vp_ax
                                         if abs(vp_ax) > 1e-30 else 0.0)
                 except Exception:
-                    self._well_depth = 0.0
+                    self._well_depth = -np.inf
 
             self._cache_x = cx
             dt = time.time() - t0
             parts = [f"f_QI={self._fqi:.3e}",
                      f"f_maxJ={self._fmaxj:.3e}",
+                     f"f_Bmin={self._fbmin:.3e}",
                      f"delta={self._mirror:.4f}",
                      f"iota=[{self._iota_ax:.3f},{self._iota_ed:.3f}]"]
+            if getattr(args, 'w_beta', 0.0) > 0:
+                parts.append(f"beta={self._beta:.4f}")
             if getattr(args, 'w_grad_s', 0.0) > 0:
                 parts.append(f"f_nabla_s={self._fgs:.3e}")
             if getattr(args, 'w_well', 0.0) > 0:
@@ -337,54 +317,84 @@ def run_vmec(args):
             parts.append(f"({dt:.1f}s)")
             print(f"    [SQuID #{self._n}]  {'  '.join(parts)}")
 
-        def f_maxJ(self):
+        def maxJ_residuals(self):
             self._compute()
-            return np.sqrt(max(self._fmaxj, 0.0))
+            return self._maxj_residuals
 
-        def f_QI(self):
+        def qi_residuals(self):
             self._compute()
-            return np.sqrt(max(self._fqi, 0.0))
+            return self._qi_residuals
+
+        def bmin_residuals(self):
+            self._compute()
+            return self._bmin_residuals
 
         def mirror_penalty(self):
             self._compute()
-            return np.sqrt(_compute_mirror_penalty(
-                self._mirror, args.mirror_target,
-                getattr(args, 'mirror_max', None)))
+            return np.array([np.sqrt(_compute_mirror_penalty(
+                self._mirror, args.mirror_target))])
+
+        def beta_penalty(self):
+            self._compute()
+            return np.array([np.sqrt(_compute_beta_penalty(
+                self._beta, args.beta_target))])
+
+        def aspect_penalty(self):
+            return np.array([np.sqrt(hinge_loss(vmec.aspect(), args.aspect_target))])
 
         def iota_penalty(self):
             self._compute()
-            return np.sqrt(_compute_iota_penalty(
+            return np.array([np.sqrt(_compute_iota_penalty(
                 self._iota_ax, self._iota_ed,
-                args.iota_ax, args.iota_edge))
+                args.iota_ax, args.iota_edge,
+                args.iota_tolerance))])
 
         def grad_s_penalty(self):
             self._compute()
-            return np.sqrt(max(self._fgs, 0.0))
+            return np.array([np.sqrt(max(self._fgs, 0.0))])
 
         def well_penalty(self):
             self._compute()
-            return np.sqrt(_compute_well_penalty(
-                vmec, args.target_well))
+            return np.array([np.sqrt(_compute_well_penalty(
+                vmec, args.target_well))])
 
         def reg_penalty(self):
             x_cur = np.array(vmec.x, dtype=float)
-            return np.sqrt(float(np.sum((x_cur - x0_vmec) ** 2)))
+            delta = x_cur - x0_vmec
+            return delta / np.sqrt(max(delta.size, 1))
 
     squid = SQuIDObjective()
+    qi_r2 = None
+    if args.w_qi_r2 > 0:
+        qi_r2 = QIResidual(
+            vmec, s_vals,
+            nphi=args.qi_r2_nphi,
+            nalpha=args.qi_r2_nalpha,
+            nBj=args.qi_r2_nbj,
+            mpol=args.qi_r2_mpol,
+            ntor=args.qi_r2_ntor,
+            arr_out=args.qi_r2_arr_out,
+        )
 
     # Core objectives (always active)
     tuples = [
-        (squid.f_QI, 0.0, args.w_qi),
-        (squid.f_maxJ, 0.0, args.w_maxj),
-        (vmec.aspect, args.aspect_target, args.w_ar),
+        (squid.qi_residuals, 0.0, args.w_qi),
+        (squid.maxJ_residuals, 0.0, args.w_maxj),
+        (squid.bmin_residuals, 0.0, args.w_bmin),
+        (squid.aspect_penalty, 0.0, args.w_ar),
         (squid.reg_penalty, 0.0, args.w_reg),
     ]
     active = [f"w_QI={args.w_qi}", f"w_maxJ={args.w_maxj}",
-              f"w_AR={args.w_ar}", f"w_reg={args.w_reg}"]
+              f"w_Bmin={args.w_bmin}", f"w_AR={args.w_ar}",
+              f"w_reg={args.w_reg}"]
+    if qi_r2 is not None:
+        tuples.append((qi_r2.residuals, 0.0, args.w_qi_r2))
+        active.append(f"w_QI_R2={args.w_qi_r2}")
 
     # Optional objectives (only added when weight > 0)
     optional = [
         (args.w_mirror, squid.mirror_penalty, "w_mirror"),
+        (getattr(args, 'w_beta', 0.0), squid.beta_penalty, "w_beta"),
         (args.w_iota, squid.iota_penalty, "w_iota"),
         (getattr(args, 'w_grad_s', 0.0), squid.grad_s_penalty, "w_grad_s"),
         (getattr(args, 'w_well', 0.0), squid.well_penalty, "w_well"),
@@ -416,14 +426,16 @@ def run_vmec(args):
     max_nfev = args.maxiter * (n_dofs + 1)
     abs_step = getattr(args, 'abs_step', 1e-4)
     rel_step = getattr(args, 'rel_step', 0.0)
-    print(f"\n  Starting optimisation (max_nfev={max_nfev}, "
-          f"abs_step={abs_step:.0e}) ...")
-    t_start = time.time()
-    least_squares_serial_solve(prob, max_nfev=max_nfev, grad=True,
-                               abs_step=abs_step, rel_step=rel_step)
-    t_total = time.time() - t_start
-
-    print(f"\n  Finished in {t_total / 60:.1f} min  ({squid._n} evals)")
+    if max_nfev > 0:
+        print(f"\n  Starting optimisation (max_nfev={max_nfev}, "
+              f"abs_step={abs_step:.0e}) ...")
+        t_start = time.time()
+        least_squares_serial_solve(prob, max_nfev=max_nfev, grad=True,
+                                   abs_step=abs_step, rel_step=rel_step)
+        t_total = time.time() - t_start
+        print(f"\n  Finished in {t_total / 60:.1f} min  ({squid._n} evals)")
+    else:
+        print("\n  maxiter <= 0: initial evaluation only; optimisation skipped.")
 
     obj_f = prob.objective()
     print(f"\n  Initial objective = {obj0:.4e}")

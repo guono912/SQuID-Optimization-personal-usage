@@ -16,7 +16,7 @@ Usage:
 
 Tiers:
     default      -> core SQuID + equilibrium sanity + geometry/stability preview
-    --extended   -> add third-tier transport diagnostics (ITG proxy)
+    --extended   -> add third-tier transport diagnostics (ITG)
     --ae         -> add Available Energy on top of --extended
 """
 
@@ -25,25 +25,15 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import sys
 import argparse
+import json
+from pathlib import Path
+from fractions import Fraction
 import numpy as np
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 
-from simsopt.mhd import Vmec
 
-from squid.evaluation.evaluate import (
-    evaluate_squid_detailed,
-    evaluate_itg,
-    plot_J_contours,
-    plot_squid_core_diagnostics,
-    plot_transport_diagnostics,
-)
-from squid.evaluation.axis_geometry import axis_geometry_from_vmec
-from squid.evaluation.available_energy import ae_diagnostics
-from squid.core.boozer_utils import run_boozer
-
-
-def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
+def _evaluate_effective_ripple(vmec, s_val, nc_file_path, output_dir="."):
     """
     Evaluate effective ripple eps_eff at normalised flux *s_val*.
 
@@ -56,7 +46,8 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
     -------
     (value, source_str) : (float | None, str)
     """
-    import glob
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     # ── Priority 1: DESC effective ripple (Nemov formula) ────────────
     try:
@@ -102,12 +93,12 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
             boozer.register(s)
         boozer.run()
 
-        latest_boozmn = "boozmn_squid_diag.nc"
+        latest_boozmn = output_dir / "boozmn_squid_diag.nc"
         try:
-            boozer.write_boozmn(latest_boozmn)
+            boozer.write_boozmn(str(latest_boozmn))
         except AttributeError:
-            boozer.bx.write_boozmn(latest_boozmn)
-        if not os.path.isfile(latest_boozmn):
+            boozer.bx.write_boozmn(str(latest_boozmn))
+        if not latest_boozmn.is_file():
             raise FileNotFoundError(
                 f"write_boozmn() did not produce {latest_boozmn}")
         print(f"      [NEO-RT] Using Boozer file: {latest_boozmn}")
@@ -118,7 +109,8 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
         phi_edge = float(vmec.wout.phi[-1])         # total toroidal flux [Tm²]
         a_minor  = float(vmec.wout.Aminor_p)        # minor radius [m]
         result = nc_to_neort.convert_boozmn_to_neort(
-            latest_boozmn, output_path="in_file", s_values=s_surfaces,
+            str(latest_boozmn), output_path=str(output_dir / "in_file"),
+            s_values=s_surfaces,
             flux_override=phi_edge, a_override=a_minor,
         )
         if result is None:
@@ -140,7 +132,7 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
         # because it prepends './' to the executable path, which breaks
         # absolute paths.  We call neo_rt.x via subprocess directly.
         runname = "squid_diag"
-        with open(f"{runname}.in", "w") as fh:
+        with open(output_dir / f"{runname}.in", "w") as fh:
             fh.write(
                 "&params\n"
                 f"    s = {s_val}\n"
@@ -168,6 +160,7 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
         result = subprocess.run(
             [neort_exe, runname],
             capture_output=True, text=True, timeout=300,
+            cwd=str(output_dir),
         )
         if result.returncode != 0:
             raise RuntimeError(
@@ -176,8 +169,8 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
 
         # Parse D11 from {runname}.out
         # Header: "# M_t D11co D11ctr D11t D11 D12co D12ctr D12t D12"
-        out_file = f"{runname}.out"
-        if not os.path.isfile(out_file):
+        out_file = output_dir / f"{runname}.out"
+        if not out_file.is_file():
             raise FileNotFoundError(f"{out_file} not written by neo_rt.x")
         with open(out_file) as fh:
             for line in fh:
@@ -205,6 +198,8 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
 
     # ── Priority 2: Boozer proxy (fallback) ─────────────────────────
     try:
+        from squid.core.boozer_utils import run_boozer
+
         _, surface_data = run_boozer(vmec, [s_val], mpol=16, ntor=16)
         data = surface_data[0]
         B_min, B_max = data["B_min"], data["B_max"]
@@ -222,17 +217,31 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path):
     return (None, "No method available")
 
 
-def _evaluate_effective_ripple_series(vmec, s_vals, nc_file_path):
+def _evaluate_effective_ripple_series(vmec, s_vals, nc_file_path, output_dir="."):
     """Evaluate the ripple metric on several representative surfaces."""
     results = []
     for s_val in s_vals:
-        value, source = _evaluate_effective_ripple(vmec, float(s_val), nc_file_path)
+        value, source = _evaluate_effective_ripple(
+            vmec, float(s_val), nc_file_path, output_dir=output_dir)
         results.append({
             "s": float(s_val),
             "value": value,
             "source": source,
         })
     return results
+
+
+def _jsonify(obj):
+    """Convert numpy-rich diagnostic objects to JSON-serialisable values."""
+    if isinstance(obj, np.ndarray):
+        return [_jsonify(x) for x in obj.tolist()]
+    if isinstance(obj, np.generic):
+        return obj.item()
+    if isinstance(obj, dict):
+        return {str(k): _jsonify(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_jsonify(x) for x in obj]
+    return obj
 
 
 def _compute_equilibrium_sanity(vmec, squid_info):
@@ -297,50 +306,164 @@ def _sorted_surface_dict(metric_dict):
     return s, values
 
 
-def _grade_qi(qi_surface_rms):
-    if len(qi_surface_rms) == 0 or not np.any(np.isfinite(qi_surface_rms)):
-        return "unknown"
-    worst = float(np.nanmax(qi_surface_rms))
-    if worst < 6e-3:
-        return "good"
-    if worst < 1.2e-2:
-        return "watch"
-    return "poor"
+def _low_order_rationals(max_denominator, max_value):
+    """Return unique positive p/q values up to *max_denominator*."""
+    rationals = set()
+    max_value = max(float(max_value), 0.0)
+    for q in range(1, int(max_denominator) + 1):
+        p_max = int(np.ceil(max_value * q)) + 1
+        for p in range(1, p_max + 1):
+            rationals.add(Fraction(p, q))
+    return sorted(rationals, key=lambda x: (float(x), x.denominator))
 
 
-def _grade_maxj(pass_ratio):
-    if not np.isfinite(pass_ratio):
-        return "unknown"
-    if pass_ratio >= 0.8:
-        return "strong"
-    if pass_ratio >= 0.6:
-        return "mixed"
-    return "weak"
+def _scan_iota_rationals(vmec, max_denominator=8, warn_distance=0.01,
+                         s_min=0.05, s_max=0.95):
+    """
+    Scan the VMEC iota profile against low-order rational surfaces.
+
+    This function only reports geometric facts relative to the supplied
+    threshold. It does not decide whether a configuration should be accepted.
+    """
+    iotaf = np.array(getattr(vmec.wout, "iotaf", []), dtype=float)
+    if iotaf.size < 2 or not np.any(np.isfinite(iotaf)):
+        return {
+            "available": False,
+            "reason": "iota profile missing or non-finite",
+        }
+
+    s_grid = np.linspace(0.0, 1.0, iotaf.size)
+    mask = (
+        (s_grid >= float(s_min)) &
+        (s_grid <= float(s_max)) &
+        np.isfinite(iotaf)
+    )
+    if not np.any(mask):
+        return {
+            "available": False,
+            "reason": "no finite iota points in requested scan range",
+        }
+
+    s_scan = s_grid[mask]
+    iota_scan = iotaf[mask]
+    abs_iota = np.abs(iota_scan)
+    sign = -1.0 if np.nanmedian(iota_scan) < 0 else 1.0
+
+    rationals = _low_order_rationals(
+        max_denominator=max_denominator,
+        max_value=np.nanmax(abs_iota) + abs(warn_distance),
+    )
+
+    nearest = None
+    near_points = []
+    crossings = []
+
+    for rat in rationals:
+        rat_value = float(rat)
+        distances = np.abs(abs_iota - rat_value)
+        idx = int(np.nanargmin(distances))
+        distance = float(distances[idx])
+        record = {
+            "s": float(s_scan[idx]),
+            "iota": float(iota_scan[idx]),
+            "rational": f"{int(sign * rat.numerator)}/{rat.denominator}",
+            "rational_abs": rat_value,
+            "denominator": int(rat.denominator),
+            "distance": distance,
+        }
+        if nearest is None or distance < nearest["distance"]:
+            nearest = record
+        if distance <= warn_distance:
+            near_points.append(record)
+
+        diff = abs_iota - rat_value
+        for j in range(len(diff) - 1):
+            if not (np.isfinite(diff[j]) and np.isfinite(diff[j + 1])):
+                continue
+            if diff[j] == 0:
+                s_cross = float(s_scan[j])
+            elif diff[j] * diff[j + 1] > 0:
+                continue
+            else:
+                denom = diff[j + 1] - diff[j]
+                if abs(denom) < 1e-30:
+                    continue
+                t = -diff[j] / denom
+                if t < 0 or t > 1:
+                    continue
+                s_cross = float(s_scan[j] + t * (s_scan[j + 1] - s_scan[j]))
+            crossings.append({
+                "s": s_cross,
+                "rational": f"{int(sign * rat.numerator)}/{rat.denominator}",
+                "rational_abs": rat_value,
+                "denominator": int(rat.denominator),
+            })
+
+    near_points.sort(key=lambda item: item["distance"])
+    crossings.sort(key=lambda item: (item["s"], item["denominator"]))
+    shear = np.gradient(iota_scan, s_scan) if len(s_scan) > 1 else np.array([np.nan])
+
+    return {
+        "available": True,
+        "settings": {
+            "max_denominator": int(max_denominator),
+            "warn_distance": float(warn_distance),
+            "s_min": float(s_min),
+            "s_max": float(s_max),
+        },
+        "s": s_scan,
+        "iota": iota_scan,
+        "iota_min": float(np.nanmin(iota_scan)),
+        "iota_max": float(np.nanmax(iota_scan)),
+        "abs_iota_min": float(np.nanmin(abs_iota)),
+        "abs_iota_max": float(np.nanmax(abs_iota)),
+        "shear_min": float(np.nanmin(shear)),
+        "shear_max": float(np.nanmax(shear)),
+        "nearest_low_order": nearest,
+        "near_low_order": near_points,
+        "crossings": crossings,
+    }
 
 
-def _grade_ripple(ripple_results):
-    vals = [
-        float(item["value"]) for item in ripple_results
-        if item["value"] is not None and np.isfinite(item["value"])
-    ]
-    if not vals:
-        return "unknown"
-    worst = max(vals)
-    if worst < 5e-3:
-        return "good"
-    if worst < 1e-2:
-        return "watch"
-    return "poor"
+def _mercier_summary(mercier_data):
+    if mercier_data is None:
+        return {"available": False}
+    values = np.asarray(mercier_data["values"], dtype=float)
+    s_vals = np.asarray(mercier_data["s"], dtype=float)
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return {"available": False, "reason": "no finite D_Merc values"}
+    finite_values = values[finite]
+    finite_s = s_vals[finite]
+    min_idx = int(np.argmin(finite_values))
+    neg = finite_values < 0
+    return {
+        "available": True,
+        "min": float(finite_values[min_idx]),
+        "s_at_min": float(finite_s[min_idx]),
+        "negative_count": int(np.count_nonzero(neg)),
+        "negative_fraction": float(np.count_nonzero(neg) / finite_values.size),
+    }
 
 
-def _grade_well(well_depth):
-    if not np.isfinite(well_depth):
-        return "unknown"
-    if well_depth > 0.01:
-        return "good"
-    if well_depth >= 0.0:
-        return "watch"
-    return "poor"
+def _well_summary(well_data, well_depth):
+    if well_data is None or not np.isfinite(well_depth):
+        return {"available": False}
+    values = np.asarray(well_data["values"], dtype=float)
+    s_vals = np.asarray(well_data["s"], dtype=float)
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return {"available": False, "reason": "no finite magnetic-well values"}
+    finite_values = values[finite]
+    finite_s = s_vals[finite]
+    min_idx = int(np.argmin(finite_values))
+    return {
+        "available": True,
+        "edge": float(well_depth),
+        "min": float(finite_values[min_idx]),
+        "s_at_min": float(finite_s[min_idx]),
+        "negative_count": int(np.count_nonzero(finite_values < 0)),
+    }
 
 
 def _main_issue_summary(info, ripple_results=None, itg_info=None, ae_info=None):
@@ -368,7 +491,7 @@ def _main_issue_summary(info, ripple_results=None, itg_info=None, ae_info=None):
         itg_s, itg_vals = _sorted_surface_dict(itg_info["per_surface"])
         if len(itg_vals) > 0 and np.any(np.isfinite(itg_vals)):
             worst_idx = int(np.nanargmax(itg_vals))
-            notes.append(f"ITG proxy peaks at s={itg_s[worst_idx]:.2f}")
+            notes.append(f"ITG target peaks at s={itg_s[worst_idx]:.2f}")
 
     if ae_info is not None:
         ae_s, ae_vals = _sorted_surface_dict({k: v for k, v in ae_info.items() if k != "total"})
@@ -377,16 +500,6 @@ def _main_issue_summary(info, ripple_results=None, itg_info=None, ae_info=None):
             notes.append(f"AE peaks at s={ae_s[worst_idx]:.2f}")
 
     return notes
-
-
-def _overall_verdict(sanity, qi_grade, maxj_grade, ripple_grade):
-    if sanity["status"] == "FAIL":
-        return "fail"
-    if maxj_grade == "weak" or ripple_grade == "poor":
-        return "needs work"
-    if qi_grade == "good" and maxj_grade in {"strong", "mixed"} and ripple_grade != "poor":
-        return "promising"
-    return "mixed"
 
 
 def _plot_axis_geometry_summary(ax_info, mercier_data=None, well_data=None,
@@ -495,10 +608,10 @@ def main():
     parser.add_argument("--s_center", type=float, default=0.5)
     parser.add_argument("--ds", type=float, default=0.1)
     parser.add_argument("--itg_method", choices=["drift_curvature", "vacuum_dBds"],
-                        default="vacuum_dBds",
+                        default="drift_curvature",
                         help="Bad-curvature detection method for f_nabla_s")
     parser.add_argument("--extended", action="store_true",
-                        help="Run third-tier transport diagnostics (ITG proxy, optional AE)")
+                        help="Run third-tier transport diagnostics (ITG, optional AE)")
     parser.add_argument("--extended_surfaces", type=float, nargs="+",
                         default=[0.1, 0.3, 0.5],
                         help="Flux surfaces for third-tier ITG diagnostics")
@@ -507,6 +620,25 @@ def main():
     parser.add_argument("--eps_eff_surfaces", type=float, nargs="+",
                         default=[0.25, 0.5, 0.75],
                         help="Normalised flux surfaces for effective ripple evaluation")
+    parser.add_argument("--skip_ripple", action="store_true",
+                        help="Skip effective-ripple/proxy evaluation for fast target scans")
+    parser.add_argument("--rational_max_denominator", type=int, default=8,
+                        help="Largest denominator q in low-order iota p/q scan")
+    parser.add_argument("--rational_warn_distance", type=float, default=0.01,
+                        help="Report iota points within this absolute distance of p/q")
+    parser.add_argument("--rational_s_min", type=float, default=0.05,
+                        help="Inner s boundary for low-order iota scan")
+    parser.add_argument("--rational_s_max", type=float, default=0.95,
+                        help="Outer s boundary for low-order iota scan")
+    parser.add_argument("--qi_r2", action="store_true",
+                        help="Evaluate optional R2 squash-stretch-shuffle QI diagnostic")
+    parser.add_argument("--qi_r2_nphi", type=int, default=201)
+    parser.add_argument("--qi_r2_nalpha", type=int, default=16)
+    parser.add_argument("--qi_r2_nbj", type=int, default=201)
+    parser.add_argument("--qi_r2_mpol", type=int, default=12)
+    parser.add_argument("--qi_r2_ntor", type=int, default=12)
+    parser.add_argument("--qi_r2_arr_out", action="store_true",
+                        help="Use full (surface, alpha, phi) R2 residuals instead of per-alpha RMS")
     parser.add_argument("--ae_surfaces", type=float, nargs="+",
                         default=[0.2, 0.5, 0.8],
                         help="Flux surfaces for AE diagnostics when --ae is enabled")
@@ -518,14 +650,36 @@ def main():
                         help="AE: -d ln T / d s")
     parser.add_argument("--plot", action="store_true",
                         help="Generate diagnostic plots")
+    parser.add_argument("--output_dir", type=str, default="runs/diagnose_latest",
+                        help="Directory for report JSON, plots, and solver scratch files")
+    parser.add_argument("--report_json", type=str, default=None,
+                        help="Optional report filename inside output_dir")
     args = parser.parse_args()
+
+    from simsopt.mhd import Vmec
+    from squid.evaluation.evaluate import (
+        evaluate_squid_detailed,
+        evaluate_itg,
+        plot_J_contours,
+        plot_squid_core_diagnostics,
+        plot_transport_diagnostics,
+    )
+    from squid.evaluation.axis_geometry import axis_geometry_from_vmec
+    from squid.evaluation.available_energy import ae_diagnostics
+    from squid.objectives.qi_residual import compute_qi_residual_r2
+
+    nc_file = os.path.abspath(args.nc_file)
+    output_dir = Path(args.output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    report_name = args.report_json or f"{Path(nc_file).stem}_diagnostics.json"
 
     print(f"\n{'=' * 60}")
     print("SQuID Diagnostic Evaluation")
     print(f"{'=' * 60}")
-    print(f"  Input: {args.nc_file}")
+    print(f"  Input: {nc_file}")
+    print(f"  Output dir: {output_dir}")
 
-    vmec = Vmec(args.nc_file)
+    vmec = Vmec(nc_file)
     vmec.run()
     print(f"  nfp = {vmec.wout.nfp}, ns = {vmec.wout.ns}")
 
@@ -545,20 +699,51 @@ def main():
         verbose=False,
     )
 
-    qi_grade = _grade_qi(info["qi_surface_rms"])
-    maxj_grade = _grade_maxj(info["maxj_global_pass_ratio"])
-
     print(f"  f_QI             = {info['f_QI']:.6e}")
     print(f"  f_maxJ           = {info['f_maxJ']:.6e}")
+    print(f"  f_Bmin           = {info['f_Bmin']:.6e}")
     print(f"  mirror ratio     = {info['mirror_ratio']:.4f}")
-    print(f"  QI grade         = {qi_grade}")
     print(f"  QI worst surface = s={info['s_vals'][info['qi_worst_surface_idx']]:.2f}")
     for s_val, rms, p95 in zip(info["s_vals"], info["qi_surface_rms"], info["qi_surface_p95"]):
         print(f"    QI @ s={s_val:.2f}: RMS={rms:.3e}, p95={p95:.3e}")
 
+    qi_r2_info = None
+    if args.qi_r2:
+        print(f"  Evaluating R2 QI diagnostic ...")
+        try:
+            _, qi_r2_residuals = compute_qi_residual_r2(
+                vmec, s_vals,
+                nphi=args.qi_r2_nphi,
+                nalpha=args.qi_r2_nalpha,
+                nBj=args.qi_r2_nbj,
+                mpol=args.qi_r2_mpol,
+                ntor=args.qi_r2_ntor,
+                arr_out=args.qi_r2_arr_out,
+            )
+            qi_r2_info = {
+                "f_QI_R2": float(np.sum(qi_r2_residuals ** 2)),
+                "rms": float(np.sqrt(np.mean(qi_r2_residuals ** 2))),
+                "max_abs": float(np.max(np.abs(qi_r2_residuals))) if qi_r2_residuals.size else 0.0,
+                "num_residuals": int(qi_r2_residuals.size),
+                "settings": {
+                    "nphi": args.qi_r2_nphi,
+                    "nalpha": args.qi_r2_nalpha,
+                    "nBj": args.qi_r2_nbj,
+                    "mpol": args.qi_r2_mpol,
+                    "ntor": args.qi_r2_ntor,
+                    "arr_out": bool(args.qi_r2_arr_out),
+                },
+            }
+            print(
+                f"  f_QI_R2          = {qi_r2_info['f_QI_R2']:.6e} "
+                f"(rms={qi_r2_info['rms']:.3e}, N={qi_r2_info['num_residuals']})"
+            )
+        except Exception as e:
+            qi_r2_info = {"failed": str(e)}
+            print(f"  f_QI_R2          = [failed: {e}]")
+
     if len(info["interval_centers"]) > 0:
         worst_interval_idx = int(info["maxj_worst_interval_idx"])
-        print(f"  max-J grade      = {maxj_grade}")
         print(f"  max-J pass ratio = {info['maxj_global_pass_ratio']:.3f}")
         print(f"  max-J violation  = {info['maxj_global_violation_fraction']:.3f}")
         print("  max-J per interval:")
@@ -585,6 +770,33 @@ def main():
     print(f"  Aspect ratio = {vmec.wout.aspect:.4f}")
     print(f"  Iota (core)  = {vmec.wout.iotaf[0]:.4f}")
     print(f"  Iota (edge)  = {vmec.wout.iotaf[-1]:.4f}")
+    iota_scan = _scan_iota_rationals(
+        vmec,
+        max_denominator=args.rational_max_denominator,
+        warn_distance=args.rational_warn_distance,
+        s_min=args.rational_s_min,
+        s_max=args.rational_s_max,
+    )
+    if iota_scan.get("available"):
+        nearest = iota_scan["nearest_low_order"]
+        print(
+            "  Iota range   = "
+            f"[{iota_scan['iota_min']:.4f}, {iota_scan['iota_max']:.4f}] "
+            f"for s in [{args.rational_s_min:.2f}, {args.rational_s_max:.2f}]"
+        )
+        print(
+            "  Nearest low-order iota: "
+            f"{nearest['rational']} at s={nearest['s']:.3f}, "
+            f"iota={nearest['iota']:.4f}, |Δι|={nearest['distance']:.4e}"
+        )
+        print(
+            "  Low-order crossings: "
+            f"{len(iota_scan['crossings'])} for q<={args.rational_max_denominator}; "
+            f"near points within {args.rational_warn_distance:g}: "
+            f"{len(iota_scan['near_low_order'])}"
+        )
+    else:
+        print(f"  Iota rational scan: unavailable ({iota_scan.get('reason', 'unknown')})")
 
     if sanity["status"] == "FAIL":
         print("\nAborting further diagnostics: equilibrium failed sanity checks.")
@@ -603,19 +815,15 @@ def main():
         dmerc = np.array(vmec.wout.Dmerc[1:], dtype=float)
         s_half = np.array(vmec.s_half_grid, dtype=float)
         mercier_data = {"s": s_half, "values": dmerc}
-        min_idx = int(np.argmin(dmerc))
-        min_dmerc = float(dmerc[min_idx])
-        if min_dmerc > 0:
-            print(
-                "  Mercier Stability: "
-                f"STABLE (min D_Merc = {min_dmerc:.4e} at s={s_half[min_idx]:.2f})"
-            )
-        else:
-            print(
-                "  Mercier Stability: "
-                f"UNSTABLE (min D_Merc = {min_dmerc:.4e} at s={s_half[min_idx]:.2f})"
-            )
+        mercier_facts = _mercier_summary(mercier_data)
+        print(
+            "  Mercier D_Merc: "
+            f"min={mercier_facts['min']:.4e} at s={mercier_facts['s_at_min']:.2f}, "
+            f"negative_points={mercier_facts['negative_count']}, "
+            f"negative_fraction={mercier_facts['negative_fraction']:.3f}"
+        )
     except Exception:
+        mercier_facts = {"available": False}
         print("  Mercier Stability: [Not available in this nc file]")
 
     # 2. Magnetic Well Depth
@@ -624,34 +832,39 @@ def main():
         well_profile = (vp[0] - vp) / max(vp[0], 1e-30)
         well_data = {"s": np.array(vmec.s_half_grid, dtype=float), "values": well_profile}
         well_depth = float(well_profile[-1])
-        min_well_idx = int(np.argmin(well_profile))
+        well_facts = _well_summary(well_data, well_depth)
         print(
             "  Magnetic Well Depth: "
             f"edge={well_depth * 100:.2f}%, "
-            f"min={well_profile[min_well_idx] * 100:.2f}% at "
-            f"s={well_data['s'][min_well_idx]:.2f}"
+            f"min={well_facts['min'] * 100:.2f}% at "
+            f"s={well_facts['s_at_min']:.2f}, "
+            f"negative_points={well_facts['negative_count']}"
         )
     except Exception:
+        well_facts = {"available": False}
         print("  Magnetic Well Depth: [Not available in this nc file]")
 
     # 3. Effective Ripple (eps_eff)
     print("  Effective Ripple / Ripple Proxy:")
-    eps_eff_surfaces = args.eps_eff_surfaces
-    if args.eps_eff_surface is not None:
-        eps_eff_surfaces = [args.eps_eff_surface]
-    eps_eff_surfaces = sorted(set(max(0.01, min(0.99, float(s))) for s in eps_eff_surfaces))
-    eps_eff_results = _evaluate_effective_ripple_series(vmec, eps_eff_surfaces, args.nc_file)
-    for item in eps_eff_results:
-        if item["value"] is None:
-            print(f"    s={item['s']:.2f}: [Could not evaluate. {item['source']}]")
-        else:
-            print(f"    s={item['s']:.2f}: {item['value']:.4e}  ({item['source']})")
-            if "Boozer proxy" in item["source"]:
-                print("      [Note] This value is a ripple amplitude proxy, not the true ε_eff.")
-            if "NEO-RT D11" in item["source"]:
-                print("      [Note] This value is the NEO-RT transport coefficient D11, not the direct ε_eff.")
-    ripple_grade = _grade_ripple(eps_eff_results)
-    print(f"  Ripple grade: {ripple_grade}")
+    if args.skip_ripple:
+        eps_eff_results = []
+        print("    skipped by --skip_ripple")
+    else:
+        eps_eff_surfaces = args.eps_eff_surfaces
+        if args.eps_eff_surface is not None:
+            eps_eff_surfaces = [args.eps_eff_surface]
+        eps_eff_surfaces = sorted(set(max(0.01, min(0.99, float(s))) for s in eps_eff_surfaces))
+        eps_eff_results = _evaluate_effective_ripple_series(
+            vmec, eps_eff_surfaces, nc_file, output_dir=output_dir)
+        for item in eps_eff_results:
+            if item["value"] is None:
+                print(f"    s={item['s']:.2f}: [Could not evaluate. {item['source']}]")
+            else:
+                print(f"    s={item['s']:.2f}: {item['value']:.4e}  ({item['source']})")
+                if "Boozer proxy" in item["source"]:
+                    print("      [Note] This value is a ripple amplitude proxy, not the true ε_eff.")
+                if "NEO-RT D11" in item["source"]:
+                    print("      [Note] This value is the NEO-RT transport coefficient D11, not the direct ε_eff.")
 
     # 4. Axis Geometry
     print(f"\n--- Axis Geometry ---")
@@ -690,7 +903,7 @@ def main():
             verbose=False,
         )
         itg_s, itg_vals = _sorted_surface_dict(itg_info["per_surface"])
-        print(f"  ITG proxy method = {args.itg_method}")
+        print(f"  ITG method       = {args.itg_method}")
         print(f"  Total f_nabla_s  = {itg_info['total']:.6e}")
         if len(itg_vals) > 0 and np.any(np.isfinite(itg_vals)):
             worst_itg_idx = int(np.nanargmax(itg_vals))
@@ -729,18 +942,94 @@ def main():
         else:
             print("  AE skipped. Use --ae to include TEM-oriented diagnostics.")
 
-    well_grade = _grade_well(well_depth)
-    verdict = _overall_verdict(sanity, qi_grade, maxj_grade, ripple_grade)
     notes = _main_issue_summary(info, ripple_results=eps_eff_results,
                                 itg_info=itg_info, ae_info=ae_info)
 
-    print(f"\n--- Diagnostic Summary ---")
-    print(f"  Overall verdict = {verdict}")
-    print(f"  Core grades     = QI:{qi_grade}, max-J:{maxj_grade}, ripple:{ripple_grade}, well:{well_grade}")
+    threshold_facts = {
+        "qi_worst_surface_rms": float(np.nanmax(info["qi_surface_rms"]))
+        if len(info["qi_surface_rms"]) else float("nan"),
+        "maxj_global_pass_ratio": float(info["maxj_global_pass_ratio"]),
+        "maxj_global_violation_fraction": float(info["maxj_global_violation_fraction"]),
+        "bmin_penalty": float(info["f_Bmin"]),
+        "mirror_ratio": float(info["mirror_ratio"]),
+        "mercier_min": mercier_facts.get("min"),
+        "mercier_negative_count": mercier_facts.get("negative_count"),
+        "well_depth_edge": well_facts.get("edge"),
+        "well_min": well_facts.get("min"),
+        "well_negative_count": well_facts.get("negative_count"),
+        "nearest_low_order_iota": iota_scan.get("nearest_low_order"),
+        "low_order_iota_near_count": len(iota_scan.get("near_low_order", [])),
+        "low_order_iota_crossing_count": len(iota_scan.get("crossings", [])),
+        "thresholds": {
+            "rational_max_denominator": args.rational_max_denominator,
+            "rational_warn_distance": args.rational_warn_distance,
+        },
+    }
+
+    print(f"\n--- Diagnostic Facts ---")
     if sanity['status'] != 'OK':
         print(f"  Sanity status    = {sanity['status']}")
+    print(f"  QI worst RMS     = {threshold_facts['qi_worst_surface_rms']:.6e}")
+    print(f"  max-J pass ratio = {threshold_facts['maxj_global_pass_ratio']:.3f}")
+    print(f"  Bmin penalty     = {threshold_facts['bmin_penalty']:.6e}")
+    if threshold_facts["mercier_min"] is not None:
+        print(
+            f"  Mercier min      = {threshold_facts['mercier_min']:.6e} "
+            f"({threshold_facts['mercier_negative_count']} negative points)"
+        )
+    if threshold_facts["well_depth_edge"] is not None:
+        print(f"  Well edge depth  = {threshold_facts['well_depth_edge']:.6e}")
     for note in notes:
         print(f"  Note            = {note}")
+
+    report = {
+        "input": nc_file,
+        "surfaces": s_vals,
+        "core": info,
+        "qi_r2": qi_r2_info,
+        "sanity": sanity,
+        "diagnostic_facts": threshold_facts,
+        "geometry": {
+            "aspect": float(vmec.wout.aspect),
+            "iota_axis": float(vmec.wout.iotaf[0]),
+            "iota_edge": float(vmec.wout.iotaf[-1]),
+            "iota_scan": iota_scan,
+            "axis": ax_info,
+        },
+        "stability": {
+            "mercier": mercier_data,
+            "mercier_summary": mercier_facts,
+            "well": well_data,
+            "well_summary": well_facts,
+            "well_depth": well_depth,
+        },
+        "ripple": eps_eff_results,
+        "transport": {
+            "itg": itg_info,
+            "ae": ae_info,
+        },
+        "notes": notes,
+        "settings": {
+            "num_alpha": args.num_alpha,
+            "num_pitch": args.num_pitch,
+            "num_surfaces": args.num_surfaces,
+            "s_center": args.s_center,
+            "ds": args.ds,
+            "extended": bool(args.extended),
+            "ae": bool(args.ae),
+            "itg_method": args.itg_method,
+            "qi_r2": bool(args.qi_r2),
+            "skip_ripple": bool(args.skip_ripple),
+            "rational_max_denominator": args.rational_max_denominator,
+            "rational_warn_distance": args.rational_warn_distance,
+            "rational_s_min": args.rational_s_min,
+            "rational_s_max": args.rational_s_max,
+        },
+    }
+    report_path = output_dir / report_name
+    with open(report_path, "w") as fh:
+        json.dump(_jsonify(report), fh, indent=2)
+    print(f"  Report          = {report_path}")
 
     # Plots
     if args.plot:
@@ -801,8 +1090,9 @@ def main():
             cbar.ax.tick_params(labelsize=10)
             
         fig1.tight_layout()
-        fig1.savefig("boozer_surface.png", dpi=150, bbox_inches="tight")
-        print("  Saved: boozer_surface.png")
+        fig1_path = output_dir / "boozer_surface.png"
+        fig1.savefig(fig1_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved: {fig1_path}")
 
         fig2 = plot_squid_core_diagnostics(
             info,
@@ -812,8 +1102,9 @@ def main():
                 num_pitch=args.num_pitch,
             ),
         )
-        fig2.savefig("squid_core_diagnostics.png", dpi=150, bbox_inches="tight")
-        print("  Saved: squid_core_diagnostics.png")
+        fig2_path = output_dir / "squid_core_diagnostics.png"
+        fig2.savefig(fig2_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved: {fig2_path}")
 
         if run_extended:
             fig_ext = plot_transport_diagnostics(
@@ -826,13 +1117,15 @@ def main():
                 ),
             )
             if fig_ext is not None:
-                fig_ext.savefig("transport_diagnostics.png", dpi=150, bbox_inches="tight")
-                print("  Saved: transport_diagnostics.png")
+                fig_ext_path = output_dir / "transport_diagnostics.png"
+                fig_ext.savefig(fig_ext_path, dpi=150, bbox_inches="tight")
+                print(f"  Saved: {fig_ext_path}")
 
         print("  Computing J contour polar plot (Fig. 9) ...")
         fig3 = plot_J_contours(vmec, lambda_N=0.3)
-        fig3.savefig("j_contours_polar.png", dpi=150, bbox_inches="tight")
-        print("  Saved: j_contours_polar.png")
+        fig3_path = output_dir / "j_contours_polar.png"
+        fig3.savefig(fig3_path, dpi=150, bbox_inches="tight")
+        print(f"  Saved: {fig3_path}")
 
         try:
             if ax_info is None:
@@ -843,8 +1136,9 @@ def main():
                 well_data=well_data,
                 ripple_results=eps_eff_results,
             )
-            fig4.savefig("axis_geometry.png", dpi=150, bbox_inches="tight")
-            print("  Saved: axis_geometry.png")
+            fig4_path = output_dir / "axis_geometry.png"
+            fig4.savefig(fig4_path, dpi=150, bbox_inches="tight")
+            print(f"  Saved: {fig4_path}")
         except Exception as e:
             print(f"  [axis_geometry plot failed: {e}]")
 

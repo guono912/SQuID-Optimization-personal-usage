@@ -16,6 +16,7 @@ from ..objectives.maxj_residual import (
     _extract_field_line, _compute_J_C, _compute_J_I, _evaluate_squid,
 )
 from ..objectives.itg_residual import ITGResidual
+from ..objectives.penalties import bmin_slope_penalty
 
 
 def evaluate_squid(vmec, s_vals=None, num_alpha=8, num_pitch=50,
@@ -38,12 +39,17 @@ def evaluate_squid(vmec, s_vals=None, num_alpha=8, num_pitch=50,
         )
     else:
         info = _evaluate_squid(vmec, s_vals, alphas, num_pitch, T_J, mboz, nboz)
+        if "surface_Bmin" in info:
+            info["f_Bmin"] = bmin_slope_penalty(s_vals, info["surface_Bmin"])
 
     if verbose:
         print(f"\n  SQuID Evaluation Results:")
         print(f"    f_maxJ       = {info['f_maxJ']:.6e}")
         print(f"    f_QI         = {info['f_QI']:.6e}")
+        print(f"    f_Bmin       = {info['f_Bmin']:.6e}")
         print(f"    mirror ratio = {info['mirror_ratio']:.4f}")
+        if "f_Bmin" in info:
+            print(f"    f_Bmin       = {info['f_Bmin']:.6e}")
         print(f"    iota_axis    = {info['iota_axis']:.4f}")
         print(f"    iota_edge    = {info['iota_edge']:.4f}")
         print(f"    B_min        = {info['B_min']:.4f}")
@@ -138,11 +144,18 @@ def evaluate_squid_detailed(vmec, s_vals=None, num_alpha=8, num_pitch=50,
         info = dict(
             f_maxJ=1e6,
             f_QI=1e6,
+            f_maxJ_raw=1e6,
+            f_QI_raw=1e6,
+            maxj_residuals=np.array([1e3]),
+            qi_residuals=np.array([1e3]),
             mirror_ratio=mirror_ratio,
             iota_axis=iota_axis,
             iota_edge=iota_edge,
             B_min=global_Bmin,
             B_max=global_Bmax,
+            surface_Bmin=np.asarray(bmins),
+            surface_Bmax=np.asarray(bmaxs),
+            f_Bmin=bmin_slope_penalty(s_vals, bmins),
             s_vals=s_vals,
             interval_centers=np.array([]),
             lambda_grid=lambda_grid,
@@ -178,7 +191,7 @@ def evaluate_squid_detailed(vmec, s_vals=None, num_alpha=8, num_pitch=50,
         JC_int.append(jc_k)
         JI_int.append(ji_k)
 
-    f_maxJ = 0.0
+    maxj_chunks = []
     maxj_interval_pass_ratio = np.zeros(max(ns - 1, 0))
     maxj_interval_violation_fraction = np.zeros(max(ns - 1, 0))
     maxj_interval_worst_lambda = np.zeros(max(ns - 1, 0))
@@ -193,11 +206,10 @@ def evaluate_squid_detailed(vmec, s_vals=None, num_alpha=8, num_pitch=50,
             denom = 1e-30
         diff = J_hi[:, :, None] - J_lo[:, None, :]
         mean_dJ = (diff / (ds * denom)).mean(axis=-1)
-        penalty = np.maximum(0.0, mean_dJ - T_J) ** 2
-        f_maxJ += float(penalty.sum())
+        exceedance = np.maximum(mean_dJ - T_J, 0.0)
+        maxj_chunks.append(exceedance.ravel())
 
         pass_mask = mean_dJ < T_J
-        exceedance = np.maximum(mean_dJ - T_J, 0.0)
         maxj_interval_pass_ratio[k] = float(np.mean(pass_mask))
         maxj_interval_violation_fraction[k] = 1.0 - maxj_interval_pass_ratio[k]
         maxj_lambda_violation[k, :] = np.mean(~pass_mask, axis=1)
@@ -209,16 +221,24 @@ def evaluate_squid_detailed(vmec, s_vals=None, num_alpha=8, num_pitch=50,
         worst_idx = int(np.argmax(maxj_lambda_exceedance[k, :]))
         maxj_interval_worst_lambda[k] = float(lambda_mid[worst_idx])
 
-    f_QI = 0.0
+    maxj_raw_residuals = (
+        np.concatenate(maxj_chunks) if maxj_chunks else np.zeros(0)
+    )
+    maxj_residuals = maxj_raw_residuals / np.sqrt(max(maxj_raw_residuals.size, 1))
+
+    qi_chunks = []
     qi_worst_surface_idx = int(np.argmax(qi_surface_rms))
     for k in range(ns):
         denom = float(np.mean(JI_int[k] + JC_int[k]))
         if abs(denom) < 1e-30:
             denom = 1e-30
         diff = JI_int[k][:, :, None] - JC_int[k][:, None, :]
-        f_QI += float(np.sum((diff / denom) ** 2))
+        qi_norm = diff / denom
+        qi_chunks.append(qi_norm.ravel())
         if k == qi_worst_surface_idx:
-            qi_worst_surface_alpha = np.sqrt(np.mean((diff / denom) ** 2, axis=2)).T
+            qi_worst_surface_alpha = np.sqrt(np.mean(qi_norm ** 2, axis=2)).T
+    qi_raw_residuals = np.concatenate(qi_chunks) if qi_chunks else np.zeros(0)
+    qi_residuals = qi_raw_residuals / np.sqrt(max(qi_raw_residuals.size, 1))
 
     interval_centers = 0.5 * (s_vals[:-1] + s_vals[1:])
     if len(interval_centers) > 0:
@@ -229,13 +249,20 @@ def evaluate_squid_detailed(vmec, s_vals=None, num_alpha=8, num_pitch=50,
         worst_lambda = float("nan")
 
     info = dict(
-        f_maxJ=f_maxJ,
-        f_QI=f_QI,
+        f_maxJ=float(np.sum(maxj_residuals ** 2)),
+        f_QI=float(np.sum(qi_residuals ** 2)),
+        f_Bmin=bmin_slope_penalty(s_vals, bmins),
+        f_maxJ_raw=float(np.sum(maxj_raw_residuals ** 2)),
+        f_QI_raw=float(np.sum(qi_raw_residuals ** 2)),
+        maxj_residuals=maxj_residuals,
+        qi_residuals=qi_residuals,
         mirror_ratio=mirror_ratio,
         iota_axis=iota_axis,
         iota_edge=iota_edge,
         B_min=global_Bmin,
         B_max=global_Bmax,
+        surface_Bmin=np.asarray(bmins),
+        surface_Bmax=np.asarray(bmaxs),
         s_vals=s_vals,
         interval_centers=interval_centers,
         lambda_grid=lambda_grid,
@@ -591,7 +618,7 @@ def plot_squid_core_diagnostics(info, metadata=None):
     return fig
 
 
-def plot_transport_diagnostics(itg_info=None, ae_info=None, itg_method="vacuum_dBds",
+def plot_transport_diagnostics(itg_info=None, ae_info=None, itg_method="drift_curvature",
                                metadata=None):
     """Compact summary figure for extended transport diagnostics."""
     has_itg = itg_info is not None and len(itg_info.get("per_surface", {})) > 0
@@ -616,11 +643,11 @@ def plot_transport_diagnostics(itg_info=None, ae_info=None, itg_method="vacuum_d
         if np.any(np.isfinite(y_itg)):
             worst_idx = int(np.nanargmax(y_itg))
             ax.axvline(s_itg[worst_idx], color="tab:red", ls=":", alpha=0.5)
-        ax.set_title(f"ITG proxy ({itg_method})")
+        ax.set_title(f"ITG target ({itg_method})")
         ax.set_ylabel(r"$f_{\nabla s}$")
     else:
         ax.text(0.5, 0.5, "ITG not computed", ha="center", va="center")
-        ax.set_title("ITG proxy")
+        ax.set_title("ITG target")
     ax.set_xlabel("s")
     ax.grid(True, alpha=0.3)
 

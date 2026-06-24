@@ -1,0 +1,60 @@
+{
+  "name": "stage6_refine_nfp2_beta3p75_tight",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/stage4_paper_nfp2_beta3p75_aggressive/wout_squid_optimized.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/stage6_refine_nfp2_beta3p75_tight",
+  "numerics": {
+    "maxiter": 4,
+    "max_total_evals": 70,
+    "max_dofs": 18,
+    "num_alpha": 6,
+    "num_pitch": 24,
+    "num_surfaces": 4,
+    "ns_vmec": 31,
+    "abs_step": 1e-5,
+    "checkpoint_every": 5,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 0.45,
+    "w_qi_r2": 0.01,
+    "w_maxj": 1.0,
+    "w_bmin": 0.5,
+    "w_ar": 220.0,
+    "w_reg": 240.0,
+    "w_mirror": 18.0,
+    "w_beta": 0.15,
+    "w_iota": 220.0,
+    "w_grad_s": 0.0,
+    "w_well": 8.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 140.0,
+    "w_ballooning": 0.0
+  },
+  "targets": {
+    "target_well": 0.015,
+    "mercier_margin_target": 0.04,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_ax": -0.764,
+    "iota_edge": -0.726,
+    "iota_tolerance": 0.008,
+    "bmin_slope_target": 0.01,
+    "aspect_target": 12.2,
+    "mirror_target": 0.37,
+    "beta_target": 0.022,
+    "grad_s_smin": 0.35,
+    "grad_s_smax": 0.85,
+    "grad_s_ns": 4,
+    "itg_method": "drift_curvature",
+    "outer_gate_note": "Tight small-step refinement of the best nfp2 beta3.75 branch. Preserve iota/QI/max-J while trying to reduce Mercier damage; ballooning is external-gated."
+  },
+  "r2": {
+    "nphi": 101,
+    "nalpha": 8,
+    "nbj": 101,
+    "mpol": 8,
+    "ntor": 8
+  }
+}

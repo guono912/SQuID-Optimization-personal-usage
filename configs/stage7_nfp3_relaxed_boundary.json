@@ -1,0 +1,48 @@
+{
+  "name": "stage7_nfp3_relaxed_boundary",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/stage6_refine_nfp3_beta3p75_highbeta/wout_squid_optimized.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/stage7_nfp3_relaxed_boundary",
+  "numerics": {
+    "maxiter": 3,
+    "max_total_evals": 40,
+    "max_dofs": 28,
+    "num_alpha": 6,
+    "num_pitch": 24,
+    "num_surfaces": 5,
+    "ns_vmec": 31,
+    "abs_step": 3e-5,
+    "checkpoint_every": 5,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 1.5,
+    "w_qi_r2": 0.01,
+    "w_maxj": 2.0,
+    "w_bmin": 1.0,
+    "w_ar": 120.0,
+    "w_reg": 60.0,
+    "w_mirror": 12.0,
+    "w_beta": 0.05,
+    "w_iota": 40.0,
+    "w_grad_s": 0.0,
+    "w_well": 5.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 40.0,
+    "w_ballooning": 0.0
+  },
+  "targets": {
+    "target_well": 0.02,
+    "mercier_margin_target": 0.02,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_ax": -0.722,
+    "iota_edge": -0.668,
+    "iota_tolerance": 0.020,
+    "bmin_slope_target": 0.01,
+    "aspect_target": 10.0,
+    "mirror_target": 0.32,
+    "beta_target": 0.028
+  }
+}

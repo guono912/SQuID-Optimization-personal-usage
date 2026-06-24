@@ -1,0 +1,53 @@
+{
+  "name": "goodman_prx_iota080_095_grad_s_stage1",
+  "mode": "engineering",
+  "nc_file": "/home/guozx/w7x_squid_nfp4/runs/w7x_beta_2p00_nfp4_R2p3/wout_w7x_beta_2p00_nfp4_R2p3.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/goodman_prx_iota080_095_grad_s_stage1",
+  "numerics": {
+    "maxiter": 8,
+    "max_total_evals": 260,
+    "max_dofs": 32,
+    "num_alpha": 6,
+    "num_pitch": 24,
+    "num_surfaces": 4,
+    "ns_vmec": 31,
+    "abs_step": 1e-4,
+    "checkpoint_every": 10,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 0.8,
+    "w_qi_r2": 0.0,
+    "w_maxj": 1.5,
+    "w_bmin": 1.5,
+    "w_ar": 180.0,
+    "w_reg": 18.0,
+    "w_mirror": 20.0,
+    "w_beta": 10.0,
+    "w_iota": 80.0,
+    "w_grad_s": 4.0,
+    "w_well": 10.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 8.0,
+    "w_ballooning": 0.0
+  },
+  "targets": {
+    "aspect_target": 10.8,
+    "mirror_target": 0.27,
+    "beta_target": 0.023,
+    "iota_ax": 0.80,
+    "iota_edge": 0.95,
+    "iota_edge_mode": "target",
+    "iota_tolerance": 0.025,
+    "grad_s_smin": 0.1,
+    "grad_s_smax": 0.5,
+    "grad_s_ns": 4,
+    "itg_method": "drift_curvature",
+    "target_well": 0.04,
+    "mercier_margin_target": 0.08,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "bmin_slope_target": 0.01
+  }
+}

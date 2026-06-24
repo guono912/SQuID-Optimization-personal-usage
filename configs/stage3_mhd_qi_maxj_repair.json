@@ -1,0 +1,60 @@
+{
+  "name": "stage3_mhd_qi_maxj_repair",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/stage2_eval130_R2p5/wout_squid_optimized.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/stage3_mhd_qi_maxj_repair",
+  "numerics": {
+    "maxiter": 7,
+    "max_total_evals": 180,
+    "max_dofs": 22,
+    "num_alpha": 6,
+    "num_pitch": 24,
+    "num_surfaces": 4,
+    "ns_vmec": 31,
+    "abs_step": 1e-4,
+    "checkpoint_every": 5,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 1.35,
+    "w_qi_r2": 0.06,
+    "w_maxj": 6.0,
+    "w_bmin": 2.0,
+    "w_ar": 180.0,
+    "w_reg": 28.0,
+    "w_mirror": 16.0,
+    "w_beta": 4.0,
+    "w_iota": 90.0,
+    "w_grad_s": 0.0,
+    "w_well": 5.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 24.0,
+    "w_ballooning": 0.0
+  },
+  "targets": {
+    "target_well": 0.045,
+    "mercier_margin_target": 0.09,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_ax": 0.75,
+    "iota_edge": 0.855,
+    "iota_tolerance": 0.009,
+    "bmin_slope_target": 0.01,
+    "aspect_target": 10.8,
+    "mirror_target": 0.25,
+    "beta_target": 0.022,
+    "grad_s_smin": 0.35,
+    "grad_s_smax": 0.85,
+    "grad_s_ns": 4,
+    "itg_method": "drift_curvature",
+    "outer_gate_note": "ITG is diagnostic only. Screen checkpoints every 20-30 evals with viz_report; accept only if ballooning_n_unstable=0, ballooning_lambda_max<=0, DMerc_min_gated>=0.08, and QI/max-J are not worse than stage2."
+  },
+  "r2": {
+    "nphi": 101,
+    "nalpha": 8,
+    "nbj": 101,
+    "mpol": 8,
+    "ntor": 8
+  }
+}

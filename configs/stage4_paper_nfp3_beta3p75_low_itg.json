@@ -1,0 +1,60 @@
+{
+  "name": "stage4_paper_nfp3_beta3p75_low_itg",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/paper_qi_beta_nfp4_screen_20260604/wout_nfp3_beta_3p75_m4n4_taper_z0p25.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/stage4_paper_nfp3_beta3p75_low_itg",
+  "numerics": {
+    "maxiter": 8,
+    "max_total_evals": 220,
+    "max_dofs": 30,
+    "num_alpha": 6,
+    "num_pitch": 24,
+    "num_surfaces": 4,
+    "ns_vmec": 31,
+    "abs_step": 5e-5,
+    "checkpoint_every": 5,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 0.35,
+    "w_qi_r2": 0.02,
+    "w_maxj": 0.55,
+    "w_bmin": 0.8,
+    "w_ar": 100.0,
+    "w_reg": 55.0,
+    "w_mirror": 14.0,
+    "w_beta": 0.3,
+    "w_iota": 60.0,
+    "w_grad_s": 0.0,
+    "w_well": 3.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 20.0,
+    "w_ballooning": 0.0
+  },
+  "targets": {
+    "target_well": 0.02,
+    "mercier_margin_target": 0.02,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_ax": -0.665,
+    "iota_edge": -0.692,
+    "iota_tolerance": 0.02,
+    "bmin_slope_target": 0.01,
+    "aspect_target": 9.8,
+    "mirror_target": 0.35,
+    "beta_target": 0.04,
+    "grad_s_smin": 0.35,
+    "grad_s_smax": 0.85,
+    "grad_s_ns": 4,
+    "itg_method": "drift_curvature",
+    "outer_gate_note": "Very high beta and lower ITG proxy, but poor QI/max-J. Use as exploratory repair seed only."
+  },
+  "r2": {
+    "nphi": 101,
+    "nalpha": 8,
+    "nbj": 101,
+    "mpol": 8,
+    "ntor": 8
+  }
+}

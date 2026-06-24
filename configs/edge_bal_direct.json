@@ -1,0 +1,49 @@
+{
+  "name": "edge_bal_direct_eval0075",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/r0_2p0_search/gate_results/wout_eval0075_R2p5.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/edge_bal_direct",
+  "numerics": {
+    "maxiter": 10,
+    "max_total_evals": 200,
+    "max_dofs": 10,
+    "num_alpha": 4,
+    "num_pitch": 20,
+    "num_surfaces": 3,
+    "ns_vmec": 31,
+    "abs_step": 1e-4,
+    "checkpoint_every": 5,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 0.10,
+    "w_qi_r2": 0.0,
+    "w_maxj": 1.5,
+    "w_bmin": 1.5,
+    "w_ar": 100.0,
+    "w_reg": 20.0,
+    "w_mirror": 0.0,
+    "w_beta": 0.0,
+    "w_iota": 15.0,
+    "w_grad_s": 0.0,
+    "w_well": 15.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 10.0,
+    "w_ballooning": 20.0
+  },
+  "targets": {
+    "ballooning_lambda_target": -0.0001,
+    "ballooning_rhos": [0.90, 0.95],
+    "target_well": 0.055,
+    "mercier_margin_target": 0.2,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_edge": 0.775,
+    "iota_edge_mode": "upper",
+    "iota_tolerance": 0.005,
+    "bmin_slope_target": 0.01,
+    "aspect_target": 11.0,
+    "mirror_target": 0.30
+  }
+}

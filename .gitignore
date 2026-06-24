@@ -47,3 +47,18 @@ parvmecinfo.txt
 squid_diag*
 timings.txt
 *.png
+
+# Local campaign caches and one-off archives
+/temp_db/
+/archive_*/
+/tmp/
+
+# Run-specific scratch notes and helpers
+/eng_pre.md
+/scripts/refine_qi.py
+
+# Common local tooling output
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/

@@ -466,6 +466,338 @@ def _well_summary(well_data, well_depth):
     }
 
 
+def _nc_scalar(ds, name, default=float("nan")):
+    if name not in ds.variables:
+        return default
+    try:
+        arr = np.asarray(ds.variables[name][:])
+        return float(arr.reshape(-1)[0])
+    except Exception:
+        return default
+
+
+def _fourier_cos(coeff, m, n, theta, zeta):
+    angle = m[None, None, :] * theta[:, :, None] - n[None, None, :] * zeta[:, :, None]
+    return np.sum(coeff[None, None, :] * np.cos(angle), axis=2)
+
+
+def _fourier_sin(coeff, m, n, theta, zeta):
+    angle = m[None, None, :] * theta[:, :, None] - n[None, None, :] * zeta[:, :, None]
+    return np.sum(coeff[None, None, :] * np.sin(angle), axis=2)
+
+
+def _surface_area_from_rz(R, Z, zeta):
+    theta_vals = np.linspace(0.0, 2.0 * np.pi, R.shape[0], endpoint=False)
+    zeta_vals = zeta[0, :]
+    x = R * np.cos(zeta)
+    y = R * np.sin(zeta)
+    dtheta = theta_vals[1] - theta_vals[0]
+    dzeta = zeta_vals[1] - zeta_vals[0]
+    rx_t = np.gradient(x, dtheta, axis=0, edge_order=2)
+    ry_t = np.gradient(y, dtheta, axis=0, edge_order=2)
+    rz_t = np.gradient(Z, dtheta, axis=0, edge_order=2)
+    rx_z = np.gradient(x, dzeta, axis=1, edge_order=2)
+    ry_z = np.gradient(y, dzeta, axis=1, edge_order=2)
+    rz_z = np.gradient(Z, dzeta, axis=1, edge_order=2)
+    cx = ry_t * rz_z - rz_t * ry_z
+    cy = rz_t * rx_z - rx_t * rz_z
+    cz = rx_t * ry_z - ry_t * rx_z
+    jac = np.sqrt(cx * cx + cy * cy + cz * cz)
+    return float(np.sum(jac) * dtheta * dzeta)
+
+
+def _cross_section_area(R, Z):
+    # Shoelace area in each constant-zeta poloidal cut.
+    x = R
+    y = Z
+    xp = np.roll(x, -1, axis=0)
+    yp = np.roll(y, -1, axis=0)
+    return 0.5 * np.abs(np.sum(x * yp - xp * y, axis=0))
+
+
+def _first_nonzero_radial_index(arr, start=0, atol=1e-14):
+    for idx in range(start, arr.shape[0]):
+        if np.nanmax(np.abs(arr[idx])) > atol:
+            return idx
+    return start
+
+
+def _basic_configuration_summary(
+        vmec, nc_file, info=None, qi_r2_info=None, mercier_facts=None,
+        well_facts=None, iota_scan=None, eps_eff_results=None):
+    """Build a compact single-configuration engineering/physics summary.
+
+    These quantities are intended for quick CLI inspection. Surface/area
+    metrics are reconstructed from VMEC Fourier coefficients on a grid, so
+    they are diagnostic estimates, not a replacement for dedicated CAD/mesh
+    post-processing.
+    """
+    import netCDF4
+
+    out = {}
+    with netCDF4.Dataset(nc_file) as ds:
+        nfp = int(round(_nc_scalar(ds, "nfp", 0)))
+        rmajor = _nc_scalar(ds, "Rmajor_p")
+        aminor = _nc_scalar(ds, "Aminor_p")
+        aspect = _nc_scalar(ds, "aspect")
+        volume = _nc_scalar(ds, "volume_p")
+        beta = _nc_scalar(ds, "betatotal")
+        ctor = _nc_scalar(ds, "ctor", 0.0)
+
+        phi = np.asarray(ds.variables["phi"][:], dtype=float) if "phi" in ds.variables else np.array([])
+        chi = np.asarray(ds.variables["chi"][:], dtype=float) if "chi" in ds.variables else np.array([])
+        iotaf = np.asarray(ds.variables["iotaf"][:], dtype=float) if "iotaf" in ds.variables else np.array([])
+        presf = np.asarray(ds.variables["presf"][:], dtype=float) if "presf" in ds.variables else np.array([])
+
+        theta_1d = np.linspace(0.0, 2.0 * np.pi, 96, endpoint=False)
+        zeta_1d = np.linspace(0.0, 2.0 * np.pi, 128, endpoint=False)
+        theta, zeta = np.meshgrid(theta_1d, zeta_1d, indexing="ij")
+
+        boundary_R = boundary_Z = None
+        area_avg = surface_area = float("nan")
+        if all(name in ds.variables for name in ["rmnc", "zmns", "xm", "xn"]):
+            rmnc = np.asarray(ds.variables["rmnc"][:], dtype=float)
+            zmns = np.asarray(ds.variables["zmns"][:], dtype=float)
+            xm = np.asarray(ds.variables["xm"][:], dtype=float)
+            xn = np.asarray(ds.variables["xn"][:], dtype=float)
+            boundary_R = _fourier_cos(rmnc[-1], xm, xn, theta, zeta)
+            boundary_Z = _fourier_sin(zmns[-1], xm, xn, theta, zeta)
+            area_avg = float(np.mean(_cross_section_area(boundary_R, boundary_Z)))
+            surface_area = _surface_area_from_rz(boundary_R, boundary_Z, zeta)
+
+        B_axis = B_lcfs = None
+        b_axis_idx = 0
+        if all(name in ds.variables for name in ["bmnc", "xm_nyq", "xn_nyq"]):
+            bmnc = np.asarray(ds.variables["bmnc"][:], dtype=float)
+            xm_nyq = np.asarray(ds.variables["xm_nyq"][:], dtype=float)
+            xn_nyq = np.asarray(ds.variables["xn_nyq"][:], dtype=float)
+            b_axis_idx = _first_nonzero_radial_index(bmnc, start=0)
+            B_axis = _fourier_cos(bmnc[b_axis_idx], xm_nyq, xn_nyq, theta, zeta)
+            B_lcfs = _fourier_cos(bmnc[-1], xm_nyq, xn_nyq, theta, zeta)
+
+        b0_method = "B_axis_abs_mean_fallback"
+        b0_iss04 = float(np.nanmean(np.abs(B_axis))) if B_axis is not None else float("nan")
+        if "bvco" in ds.variables and np.isfinite(rmajor) and abs(rmajor) > 1e-30:
+            bvco = np.asarray(ds.variables["bvco"][:], dtype=float)
+            nz = np.flatnonzero(np.isfinite(bvco) & (np.abs(bvco) > 1e-30))
+            if nz.size:
+                b0_iss04 = float(abs(bvco[nz[0]]) / abs(rmajor))
+                b0_method = "abs_bvco_first_nonzero_over_Rmajor"
+
+    out["NFP_field_periods"] = float(nfp)
+    out["R0_major_radius_average"] = rmajor
+    out["R0_over_a_aspect_ratio"] = aspect
+    out["minor_radius_effective_a"] = aminor
+    out["B0_toroidal_ISS04_B_phi_or_fallback_T"] = b0_iss04
+    out["B0_ISS04_extraction_method"] = b0_method
+    if B_axis is not None:
+        b_axis_abs = np.abs(B_axis)
+        out["B_axis_absB_mean_over_theta_zeta"] = float(np.nanmean(b_axis_abs))
+        out["B_axis_absB_min_over_theta_zeta"] = float(np.nanmin(b_axis_abs))
+        out["B_axis_absB_max_over_theta_zeta"] = float(np.nanmax(b_axis_abs))
+        out["B_axis_absB_sampling_rho"] = float(np.sqrt(b_axis_idx / max(bmnc.shape[0] - 1, 1)))
+        out["B_axis_absB_sampling_radial_index"] = int(b_axis_idx)
+        out["B_axis_flux_surface_absB_mean_DESC_or_VMEC"] = float(np.nanmean(b_axis_abs))
+    out["B0_for_ISS04_0D_code_recommended"] = b0_iss04
+    out["A_cross_section_area_avg_extrapolated_LCFS"] = area_avg
+    out["V_plasma_volume_enclosed_LCFS"] = volume
+    out["S_outer_flux_surface_area_extrapolated_LCFS"] = surface_area
+    if boundary_R is not None and boundary_Z is not None:
+        out["boundary_R_max"] = float(np.nanmax(boundary_R))
+        out["boundary_R_min"] = float(np.nanmin(boundary_R))
+        out["boundary_Z_max"] = float(np.nanmax(boundary_Z))
+        out["boundary_Z_min"] = float(np.nanmin(boundary_Z))
+        r_span = out["boundary_R_max"] - out["boundary_R_min"]
+        z_span = out["boundary_Z_max"] - out["boundary_Z_min"]
+        out["elongation_kappa_Zspan_over_Rspan"] = float(z_span / r_span) if r_span > 0 else None
+        out["elongation_vs_2a_Zspan_over_2a"] = float(z_span / (2.0 * aminor)) if aminor > 0 else None
+    out["Phi_t_toroidal_flux_Psi"] = float(phi[-1]) if phi.size else None
+    out["Phi_p_poloidal_flux_true_2pi_chi"] = float(2.0 * np.pi * chi[-1]) if chi.size else None
+    out["chi_poloidal_flux_normalized_by_2pi"] = float(chi[-1]) if chi.size else None
+    if B_lcfs is not None:
+        b_lcfs_abs = np.abs(B_lcfs)
+        bmin = float(np.nanmin(b_lcfs_abs))
+        bmax = float(np.nanmax(b_lcfs_abs))
+        bavg = float(np.nanmean(b_lcfs_abs))
+        out["mirror_ratio_lcfs_rho1_simplified"] = float((bmax - bmin) / (bmax + bmin)) if (bmax + bmin) > 0 else None
+        out["Bmin_lcfs"] = bmin
+        out["Bmax_lcfs"] = bmax
+        out["Bavg_lcfs_flux_surface_absB_mean"] = bavg
+        out["Bavg_lcfs_arithmetic_on_grid"] = bavg
+
+    if B_axis is not None and B_lcfs is not None:
+        samples = np.concatenate([np.ravel(np.abs(B_axis)), np.ravel(np.abs(B_lcfs))])
+        out["principal_abs_max_over_all_rho_samples"] = float(np.nanmax(samples))
+        out["principal_abs_min_over_all_rho_samples"] = float(np.nanmin(samples))
+        out["principal_abs_mean_over_all_rho_samples"] = float(np.nanmean(samples))
+
+    out["total_toroidal_current_A_VMEC_ctor"] = ctor
+    out["volume_averaged_beta"] = beta
+    if iotaf.size:
+        out["iota_max"] = float(np.nanmax(iotaf))
+        out["iota_min"] = float(np.nanmin(iotaf))
+        out["iota_axis"] = float(iotaf[0])
+        out["iota_edge"] = float(iotaf[-1])
+    if presf.size:
+        out["pressure_Pa_max"] = float(np.nanmax(presf))
+        out["pressure_Pa_min"] = float(np.nanmin(presf))
+        out["pressure_edge_Pa"] = float(presf[-1])
+
+    if info is not None:
+        out["f_QI"] = float(info.get("f_QI", np.nan))
+        out["f_maxJ"] = float(info.get("f_maxJ", np.nan))
+        out["f_Bmin"] = float(info.get("f_Bmin", np.nan))
+        out["mirror_ratio_core_diagnostic"] = float(info.get("mirror_ratio", np.nan))
+        out["maxJ_global_pass_ratio"] = float(info.get("maxj_global_pass_ratio", np.nan))
+        out["maxJ_global_violation_fraction"] = float(info.get("maxj_global_violation_fraction", np.nan))
+        if len(info.get("qi_surface_rms", [])):
+            out["QI_worst_surface_RMS"] = float(np.nanmax(info["qi_surface_rms"]))
+        centers = info.get("interval_centers", [])
+        idx = int(info.get("maxj_worst_interval_idx", -1))
+        if idx >= 0 and idx < len(centers):
+            out["maxJ_worst_interval_center_s"] = float(centers[idx])
+            out["maxJ_worst_lambda_N"] = float(info.get("maxj_worst_lambda", np.nan))
+    if qi_r2_info and "f_QI_R2" in qi_r2_info:
+        out["f_QI_R2"] = float(qi_r2_info["f_QI_R2"])
+    if mercier_facts and mercier_facts.get("available"):
+        out["Mercier_DMerc_min"] = float(mercier_facts["min"])
+        out["Mercier_DMerc_s_at_min"] = float(mercier_facts["s_at_min"])
+        out["Mercier_DMerc_negative_count"] = int(mercier_facts["negative_count"])
+    if well_facts and well_facts.get("available"):
+        out["magnetic_well_depth_edge"] = float(well_facts["edge"])
+        out["magnetic_well_depth_min"] = float(well_facts["min"])
+        out["magnetic_well_negative_count"] = int(well_facts["negative_count"])
+    if iota_scan and iota_scan.get("available"):
+        nearest = iota_scan["nearest_low_order"]
+        out["nearest_low_order_iota_rational"] = nearest["rational"]
+        out["nearest_low_order_iota_s"] = float(nearest["s"])
+        out["nearest_low_order_iota_distance"] = float(nearest["distance"])
+        out["low_order_iota_near_count"] = len(iota_scan.get("near_low_order", []))
+        out["low_order_iota_crossing_count"] = len(iota_scan.get("crossings", []))
+    if eps_eff_results:
+        finite = [x for x in eps_eff_results if x.get("value") is not None]
+        if finite:
+            worst = max(finite, key=lambda x: float(x["value"]))
+            out["effective_ripple_or_proxy_worst_s"] = float(worst["s"])
+            out["effective_ripple_or_proxy_worst_value"] = float(worst["value"])
+            out["effective_ripple_or_proxy_source"] = worst["source"]
+    return out
+
+
+def _compact_profile(x, y, x_name, y_name):
+    if x is None or y is None:
+        return []
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    n = min(len(x), len(y))
+    return [
+        {x_name: float(x[i]), y_name: float(y[i])}
+        for i in range(n)
+        if np.isfinite(x[i]) and np.isfinite(y[i])
+    ]
+
+
+def _compact_diagnostic_report(
+        nc_file, s_vals, info, qi_r2_info, basic_summary, sanity,
+        threshold_facts, iota_scan, mercier_data, mercier_facts,
+        well_data, well_facts, well_depth, eps_eff_results,
+        itg_info, ae_info, notes, args):
+    """Report intended for humans: scalar facts and short profiles only."""
+    core = {
+        "f_QI": float(info.get("f_QI", np.nan)),
+        "f_maxJ": float(info.get("f_maxJ", np.nan)),
+        "f_Bmin": float(info.get("f_Bmin", np.nan)),
+        "mirror_ratio": float(info.get("mirror_ratio", np.nan)),
+        "maxJ_global_pass_ratio": float(info.get("maxj_global_pass_ratio", np.nan)),
+        "maxJ_global_violation_fraction": float(info.get("maxj_global_violation_fraction", np.nan)),
+        "QI_worst_surface_RMS": float(np.nanmax(info.get("qi_surface_rms", [np.nan]))),
+    }
+    centers = info.get("interval_centers", [])
+    idx = int(info.get("maxj_worst_interval_idx", -1))
+    if idx >= 0 and idx < len(centers):
+        core["maxJ_worst_interval_center_s"] = float(centers[idx])
+        core["maxJ_worst_lambda_N"] = float(info.get("maxj_worst_lambda", np.nan))
+
+    qi_surface_profile = []
+    for s_val, rms, p95 in zip(info.get("s_vals", []),
+                               info.get("qi_surface_rms", []),
+                               info.get("qi_surface_p95", [])):
+        qi_surface_profile.append({
+            "s": float(s_val),
+            "QI_RMS": float(rms),
+            "QI_p95": float(p95),
+        })
+
+    maxj_profile = []
+    for center, passed, violated, worst_lambda in zip(
+            info.get("interval_centers", []),
+            info.get("maxj_interval_pass_ratio", []),
+            info.get("maxj_interval_violation_fraction", []),
+            info.get("maxj_interval_worst_lambda", [])):
+        maxj_profile.append({
+            "s_center": float(center),
+            "pass_ratio": float(passed),
+            "violation_fraction": float(violated),
+            "worst_lambda_N": float(worst_lambda),
+        })
+
+    if qi_r2_info:
+        core["f_QI_R2"] = qi_r2_info.get("f_QI_R2")
+        core["f_QI_R2_rms"] = qi_r2_info.get("rms")
+
+    report = {
+        "input": nc_file,
+        "summary": basic_summary,
+        "core_physics_targets": core,
+        "profiles": {
+            "QI_by_surface": qi_surface_profile,
+            "maxJ_by_radial_interval": maxj_profile,
+            "Mercier_DMerc": _compact_profile(
+                None if mercier_data is None else mercier_data.get("s"),
+                None if mercier_data is None else mercier_data.get("values"),
+                "s", "DMerc"),
+            "magnetic_well_depth": _compact_profile(
+                None if well_data is None else well_data.get("s"),
+                None if well_data is None else well_data.get("values"),
+                "s", "well_depth"),
+            "effective_ripple_or_proxy": eps_eff_results or [],
+        },
+        "mhd": {
+            "Mercier": mercier_facts,
+            "magnetic_well": well_facts,
+            "well_depth_edge": well_depth,
+        },
+        "iota_scan": {
+            "nearest_low_order": iota_scan.get("nearest_low_order") if iota_scan else None,
+            "near_low_order_count": len(iota_scan.get("near_low_order", [])) if iota_scan else None,
+            "crossing_count": len(iota_scan.get("crossings", [])) if iota_scan else None,
+            "scan_settings": {
+                "max_denominator": args.rational_max_denominator,
+                "warn_distance": args.rational_warn_distance,
+                "s_min": args.rational_s_min,
+                "s_max": args.rational_s_max,
+            },
+        },
+        "transport": {
+            "ITG": itg_info,
+            "available_energy": ae_info,
+        },
+        "sanity": sanity,
+        "diagnostic_facts": threshold_facts,
+        "notes": notes,
+        "settings": {
+            "num_alpha": args.num_alpha,
+            "num_pitch": args.num_pitch,
+            "num_surfaces": args.num_surfaces,
+            "surfaces": [float(x) for x in np.asarray(s_vals, dtype=float)],
+            "qi_r2": bool(args.qi_r2),
+            "skip_ripple": bool(args.skip_ripple),
+            "mhd_s_min": args.mhd_s_min,
+        },
+    }
+    return report
+
+
 def _main_issue_summary(info, ripple_results=None, itg_info=None, ae_info=None):
     notes = []
 
@@ -630,6 +962,8 @@ def main():
                         help="Inner s boundary for low-order iota scan")
     parser.add_argument("--rational_s_max", type=float, default=0.95,
                         help="Outer s boundary for low-order iota scan")
+    parser.add_argument("--mhd_s_min", type=float, default=0.1,
+                        help="Minimum s used for Mercier/MHD gate summaries")
     parser.add_argument("--qi_r2", action="store_true",
                         help="Evaluate optional R2 squash-stretch-shuffle QI diagnostic")
     parser.add_argument("--qi_r2_nphi", type=int, default=201)
@@ -812,12 +1146,19 @@ def main():
 
     # 1. Mercier Stability Criterion
     try:
-        dmerc = np.array(vmec.wout.Dmerc[1:], dtype=float)
-        s_half = np.array(vmec.s_half_grid, dtype=float)
+        if hasattr(vmec.wout, "DMerc"):
+            dmerc_raw = vmec.wout.DMerc
+        else:
+            dmerc_raw = vmec.wout.Dmerc
+        dmerc_full = np.array(dmerc_raw[1:], dtype=float)
+        s_half_full = np.array(vmec.s_half_grid, dtype=float)
+        mhd_mask = s_half_full >= args.mhd_s_min
+        dmerc = dmerc_full[mhd_mask]
+        s_half = s_half_full[mhd_mask]
         mercier_data = {"s": s_half, "values": dmerc}
         mercier_facts = _mercier_summary(mercier_data)
         print(
-            "  Mercier D_Merc: "
+            f"  Mercier D_Merc (s>={args.mhd_s_min:g}): "
             f"min={mercier_facts['min']:.4e} at s={mercier_facts['s_at_min']:.2f}, "
             f"negative_points={mercier_facts['negative_count']}, "
             f"negative_fraction={mercier_facts['negative_fraction']:.3f}"
@@ -982,50 +1323,24 @@ def main():
     for note in notes:
         print(f"  Note            = {note}")
 
-    report = {
-        "input": nc_file,
-        "surfaces": s_vals,
-        "core": info,
-        "qi_r2": qi_r2_info,
-        "sanity": sanity,
-        "diagnostic_facts": threshold_facts,
-        "geometry": {
-            "aspect": float(vmec.wout.aspect),
-            "iota_axis": float(vmec.wout.iotaf[0]),
-            "iota_edge": float(vmec.wout.iotaf[-1]),
-            "iota_scan": iota_scan,
-            "axis": ax_info,
-        },
-        "stability": {
-            "mercier": mercier_data,
-            "mercier_summary": mercier_facts,
-            "well": well_data,
-            "well_summary": well_facts,
-            "well_depth": well_depth,
-        },
-        "ripple": eps_eff_results,
-        "transport": {
-            "itg": itg_info,
-            "ae": ae_info,
-        },
-        "notes": notes,
-        "settings": {
-            "num_alpha": args.num_alpha,
-            "num_pitch": args.num_pitch,
-            "num_surfaces": args.num_surfaces,
-            "s_center": args.s_center,
-            "ds": args.ds,
-            "extended": bool(args.extended),
-            "ae": bool(args.ae),
-            "itg_method": args.itg_method,
-            "qi_r2": bool(args.qi_r2),
-            "skip_ripple": bool(args.skip_ripple),
-            "rational_max_denominator": args.rational_max_denominator,
-            "rational_warn_distance": args.rational_warn_distance,
-            "rational_s_min": args.rational_s_min,
-            "rational_s_max": args.rational_s_max,
-        },
-    }
+    basic_summary = _basic_configuration_summary(
+        vmec, nc_file,
+        info=info,
+        qi_r2_info=qi_r2_info,
+        mercier_facts=mercier_facts,
+        well_facts=well_facts,
+        iota_scan=iota_scan,
+        eps_eff_results=eps_eff_results,
+    )
+    print(f"\n--- Basic Configuration Summary JSON ---")
+    print(json.dumps(_jsonify(basic_summary), indent=2))
+
+    report = _compact_diagnostic_report(
+        nc_file, s_vals, info, qi_r2_info, basic_summary, sanity,
+        threshold_facts, iota_scan, mercier_data, mercier_facts,
+        well_data, well_facts, well_depth, eps_eff_results,
+        itg_info, ae_info, notes, args,
+    )
     report_path = output_dir / report_name
     with open(report_path, "w") as fh:
         json.dump(_jsonify(report), fh, indent=2)

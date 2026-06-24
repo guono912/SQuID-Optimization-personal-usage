@@ -1,0 +1,50 @@
+{
+  "name": "stage13_desc_fb",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/stage11a_mhd_push/wout_squid_eval_000025.nc",
+  "backend": "desc",
+  "run_dir": "/home/guozx/SQuID/runs/stage13_desc_fb",
+  "numerics": {
+    "maxiter": 2,
+    "max_total_evals": 40,
+    "max_dofs": 20,
+    "num_alpha": 6,
+    "num_pitch": 20,
+    "num_surfaces": 4,
+    "ns_vmec": 31,
+    "checkpoint_every": 5
+  },
+  "desc": {
+    "desc_L": 6,
+    "desc_M": 6,
+    "desc_N": 6
+  },
+  "weights": {
+    "w_qi": 0.40,
+    "w_maxj": 0.50,
+    "w_bmin": 0.30,
+    "w_ar": 80.0,
+    "w_reg": 60.0,
+    "w_mirror": 5.0,
+    "w_beta": 5.0,
+    "w_iota": 25.0,
+    "w_well": 10.0,
+    "w_mercier_margin": 60.0,
+    "w_ballooning": 15.0,
+    "w_force_balance": 2.0
+  },
+  "targets": {
+    "target_well": 0.03,
+    "mercier_margin_target": 0.03,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_ax": -0.735,
+    "iota_edge": -0.675,
+    "iota_tolerance": 0.020,
+    "aspect_target": 10.0,
+    "mirror_target": 0.30,
+    "beta_target": 0.022,
+    "ballooning_rhos": [0.5, 0.65, 0.8, 0.9],
+    "ballooning_lambda_target": 0.0
+  }
+}

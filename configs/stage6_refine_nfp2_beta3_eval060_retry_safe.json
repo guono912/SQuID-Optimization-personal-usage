@@ -1,0 +1,60 @@
+{
+  "name": "stage6_refine_nfp2_beta3_eval060_retry_safe",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/stage4_paper_nfp2_beta3_mhd_repair/checkpoints/wout_squid_eval_000060.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/stage6_refine_nfp2_beta3_eval060_retry_safe",
+  "numerics": {
+    "maxiter": 4,
+    "max_total_evals": 70,
+    "max_dofs": 12,
+    "num_alpha": 6,
+    "num_pitch": 24,
+    "num_surfaces": 4,
+    "ns_vmec": 31,
+    "abs_step": 5e-6,
+    "checkpoint_every": 5,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 0.35,
+    "w_qi_r2": 0.005,
+    "w_maxj": 0.8,
+    "w_bmin": 0.4,
+    "w_ar": 260.0,
+    "w_reg": 420.0,
+    "w_mirror": 22.0,
+    "w_beta": 0.1,
+    "w_iota": 520.0,
+    "w_grad_s": 0.0,
+    "w_well": 30.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 220.0,
+    "w_ballooning": 0.0
+  },
+  "targets": {
+    "target_well": 0.01,
+    "mercier_margin_target": 0.03,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_ax": -0.705,
+    "iota_edge": -0.689,
+    "iota_tolerance": 0.004,
+    "bmin_slope_target": 0.01,
+    "aspect_target": 12.05,
+    "mirror_target": 0.39,
+    "beta_target": 0.018,
+    "grad_s_smin": 0.35,
+    "grad_s_smax": 0.85,
+    "grad_s_ns": 4,
+    "itg_method": "drift_curvature",
+    "outer_gate_note": "Safe retry after residual-shape fallback fix. Hold iota and QI shape tightly; reject bad Mercier/HILL directions."
+  },
+  "r2": {
+    "nphi": 101,
+    "nalpha": 8,
+    "nbj": 101,
+    "mpol": 8,
+    "ntor": 8
+  }
+}

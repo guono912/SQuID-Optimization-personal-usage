@@ -1,0 +1,61 @@
+{
+  "name": "stage5_nfp2_beta3p75_mhd_balloon_repair",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/stage4_paper_nfp2_beta3p75_aggressive/wout_squid_optimized.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/stage5_nfp2_beta3p75_mhd_balloon_repair",
+  "numerics": {
+    "maxiter": 5,
+    "max_total_evals": 80,
+    "max_dofs": 30,
+    "num_alpha": 6,
+    "num_pitch": 24,
+    "num_surfaces": 4,
+    "ns_vmec": 31,
+    "abs_step": 5e-5,
+    "checkpoint_every": 5,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 0.25,
+    "w_qi_r2": 0.01,
+    "w_maxj": 0.55,
+    "w_bmin": 0.45,
+    "w_ar": 140.0,
+    "w_reg": 70.0,
+    "w_mirror": 12.0,
+    "w_beta": 1.0,
+    "w_iota": 45.0,
+    "w_grad_s": 0.0,
+    "w_well": 8.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 80.0,
+    "w_ballooning": 4.0
+  },
+  "targets": {
+    "target_well": 0.02,
+    "mercier_margin_target": 0.08,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_ax": -0.764,
+    "iota_edge": -0.726,
+    "iota_tolerance": 0.025,
+    "bmin_slope_target": 0.01,
+    "aspect_target": 12.0,
+    "mirror_target": 0.36,
+    "beta_target": 0.020,
+    "ballooning_lambda_target": 0.0,
+    "grad_s_smin": 0.35,
+    "grad_s_smax": 0.85,
+    "grad_s_ns": 4,
+    "itg_method": "drift_curvature",
+    "outer_gate_note": "Finite-beta repair branch from nfp2 beta3.75 final. Keep beta near 2%, explicitly penalize DESC ballooning, and only accept checkpoints passing external viz gate."
+  },
+  "r2": {
+    "nphi": 101,
+    "nalpha": 8,
+    "nbj": 101,
+    "mpol": 8,
+    "ntor": 8
+  }
+}

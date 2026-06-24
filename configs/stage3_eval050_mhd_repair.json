@@ -1,0 +1,59 @@
+{
+  "name": "stage3_eval050_mhd_repair",
+  "mode": "edge_bal_direct",
+  "nc_file": "/home/guozx/SQuID/runs/stage3_seeds/wout_stage2_eval050_qi_branch.nc",
+  "backend": "vmec",
+  "run_dir": "/home/guozx/SQuID/runs/stage3_eval050_mhd_repair",
+  "numerics": {
+    "maxiter": 8,
+    "max_total_evals": 180,
+    "max_dofs": 22,
+    "num_alpha": 6,
+    "num_pitch": 24,
+    "num_surfaces": 4,
+    "ns_vmec": 31,
+    "abs_step": 1e-4,
+    "checkpoint_every": 15,
+    "html_every": 0
+  },
+  "weights": {
+    "w_qi": 0.8,
+    "w_qi_r2": 0.04,
+    "w_maxj": 3.0,
+    "w_bmin": 2.0,
+    "w_ar": 180.0,
+    "w_reg": 24.0,
+    "w_mirror": 12.0,
+    "w_beta": 4.0,
+    "w_iota": 40.0,
+    "w_grad_s": 0.002,
+    "w_well": 8.0,
+    "w_mercier": 0.0,
+    "w_mercier_margin": 16.0,
+    "w_ballooning": 0.0
+  },
+  "targets": {
+    "target_well": 0.05,
+    "mercier_margin_target": 0.07,
+    "mercier_s_min": 0.1,
+    "mercier_s_max": 0.95,
+    "iota_ax": 0.75,
+    "iota_edge": 0.855,
+    "iota_tolerance": 0.012,
+    "bmin_slope_target": 0.01,
+    "aspect_target": 10.8,
+    "mirror_target": 0.25,
+    "beta_target": 0.022,
+    "grad_s_smin": 0.35,
+    "grad_s_smax": 0.85,
+    "grad_s_ns": 4,
+    "itg_method": "drift_curvature"
+  },
+  "r2": {
+    "nphi": 101,
+    "nalpha": 8,
+    "nbj": 101,
+    "mpol": 8,
+    "ntor": 8
+  }
+}

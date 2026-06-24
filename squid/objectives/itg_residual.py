@@ -2,7 +2,8 @@
 ITG turbulence target (f_nabla_s).
 
 Dual-method implementation:
-  - "drift_curvature": uses vmec.vmec_fieldlines() for the full
+  - "drift_curvature": uses simsopt.mhd.vmec_diagnostics.vmec_fieldlines
+    for the full
     curvature drift B x kappa . grad alpha  (physically correct)
   - "vacuum_dBds": uses dB/ds < 0 as a vacuum proxy
     (from simsopt_optimize_v3.py:compute_f_grad_s)
@@ -15,6 +16,7 @@ Fixed here: we use bad_curvature.astype(float) directly.
 
 import numpy as np
 from simsopt._core import Optimizable
+from simsopt.mhd.vmec_diagnostics import vmec_fieldlines
 
 
 class ITGResidual(Optimizable):
@@ -22,7 +24,7 @@ class ITGResidual(Optimizable):
     ITG turbulence residual (f_nabla_s) as a simsopt Optimizable.
 
     Computes xi = (a_min * Theta(bad_curv) * |nabla s|)^2 on each
-    target surface, then integrates xi * max(xi_95 - xi, 0).
+    target surface, then integrates xi over the sampled surface.
     """
 
     def __init__(self, vmec, snorms, method="drift_curvature",
@@ -73,9 +75,9 @@ class ITGResidual(Optimizable):
         residuals = []
         for s in self.snorms:
             try:
-                data = vmec.vmec_fieldlines(s=s, alpha=alpha, theta1d=theta)
+                data = vmec_fieldlines(vmec, s, alpha, theta1d=theta)
             except Exception:
-                residuals.append(0.0)
+                residuals.append(np.nan)
                 continue
 
             edge_toroidal_flux = vmec.wout.phipf[-1]
@@ -85,19 +87,18 @@ class ITGResidual(Optimizable):
             grad_S = np.sqrt(data.grad_s_dot_grad_s)
             xi = (a_min * bad_curvature * grad_S) ** 2
 
-            xi_flat = xi.flatten()
-            xi_pos = xi_flat[xi_flat > 0]
-            if len(xi_pos) == 0:
+            if not np.any(xi > 0):
                 residuals.append(0.0)
                 continue
-            xi_95 = np.percentile(xi_pos, 95)
 
             dtheta = 2 * np.pi / self.nalpha
             dphi = 2 * np.pi / (nfp * self.nphi)
-            f_VS = np.sum(xi * np.maximum(xi_95 - xi, 0.0)) * dtheta * dphi
+            f_VS = np.sum(xi) * dtheta * dphi
             residuals.append(float(f_VS))
 
-        self._residuals_1d = np.array(residuals)
+        self._residuals_1d = np.nan_to_num(
+            np.array(residuals, dtype=float), nan=1.0e3, posinf=1.0e3,
+            neginf=1.0e3)
         self._total = float(np.sum(self._residuals_1d))
 
     # ---- method 2: vacuum dB/ds proxy (from simsopt_optimize_v3.py) ----
@@ -167,16 +168,13 @@ class ITGResidual(Optimizable):
             bad_mask = np.where(dBds < 0, 1.0, 0.0)
 
             xi = (a_min * bad_mask * grad_s) ** 2
-            xi_pos = xi[xi > 0]
-            if len(xi_pos) == 0:
+            if not np.any(xi > 0):
                 residuals.append(0.0)
                 continue
-            xi_95 = float(np.percentile(xi_pos, 95))
 
-            integrand = xi * np.maximum(xi_95 - xi, 0.0)
             dth = 2 * np.pi / nu
             dze = 2 * np.pi / (nfp * nv)
-            f_val = float(np.sum(integrand)) * dth * dze
+            f_val = float(np.sum(xi)) * dth * dze
             residuals.append(f_val)
             f_total += f_val
 

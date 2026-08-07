@@ -44,6 +44,25 @@ def _skip_if_no_wout(func):
 class TestCoreModules(unittest.TestCase):
     """Test core subpackage without VMEC."""
 
+    def test_profile_error_detects_hidden_interior_drift(self):
+        from squid.backends.vmec_backend import _profile_error
+
+        reference = np.array([0.30, 0.32, 0.34])
+        matching = _profile_error(reference, reference.copy())
+        drifted = _profile_error(reference, np.array([0.30, 0.38, 0.34]))
+
+        self.assertEqual(matching["max_abs"], 0.0)
+        self.assertAlmostEqual(drifted["max_abs"], 0.06)
+        self.assertGreater(drifted["max_relative_to_reference_peak"], 0.1)
+
+    def test_profile_error_interpolates_resolution_changes(self):
+        from squid.backends.vmec_backend import _profile_error
+
+        coarse = np.linspace(0.0, 1.0, 5)
+        fine = np.linspace(0.0, 1.0, 17)
+        result = _profile_error(coarse, fine)
+        self.assertLess(result["max_abs"], 1.0e-14)
+
     def test_bounce_simple(self):
         """find_bounce_points on a synthetic well."""
         from squid.core.bounce import find_bounce_points
@@ -83,6 +102,70 @@ class TestCoreModules(unittest.TestCase):
         from squid.objectives.penalties import hinge_loss
         self.assertAlmostEqual(hinge_loss(0.5, 1.0), 0.0)
         self.assertAlmostEqual(hinge_loss(1.5, 1.0), 0.25)
+
+    def test_pdrot_area_weighted_statistics(self):
+        from squid.objectives.pdrot_residual import pdrot_area_weighted_stats
+
+        stats = pdrot_area_weighted_stats({
+            "pdrot": np.array([0.0, 100.0]),
+            "area_weights": np.array([99.0, 1.0]),
+            "q": np.array([2.0, 4.0]),
+            "a_eff": 0.2,
+            "kappa_gap": np.array([0.1, 0.2]),
+        })
+        self.assertAlmostEqual(stats["pdrot_mean"], 1.0)
+        self.assertAlmostEqual(stats["pdrot_cvar1"], 100.0)
+        self.assertAlmostEqual(stats["pdrot_q_mean"], 2.02)
+        self.assertAlmostEqual(stats["pdrot_a_eff"], 0.2)
+        self.assertAlmostEqual(stats["pdrot_kappa_gap_max"], 0.2)
+
+        constant = pdrot_area_weighted_stats({
+            "pdrot": np.full(4, 7.0),
+            "area_weights": np.array([1.0, 2.0, 3.0, 4.0]),
+        })
+        for name in ("pdrot_median", "pdrot_p95", "pdrot_p99", "pdrot_p999"):
+            self.assertAlmostEqual(constant[name], 7.0)
+
+    def test_mercier_flux_normalization_uses_wout_phi_edge(self):
+        from squid.diagnostics.mercier_normalization import (
+            edge_toroidal_flux_wb,
+            mercier_profiles,
+            mercier_summary,
+            vmec_half_grid_profile,
+        )
+
+        class Wout:
+            phi = np.array([0.0, 0.01, 0.02])
+            DMerc = np.array([0.0, -2.0, 3.0])
+            DWell = np.array([0.0, 4.0, 5.0])
+
+        self.assertAlmostEqual(edge_toroidal_flux_wb(Wout()), 0.02)
+        profiles = mercier_profiles(Wout())
+        np.testing.assert_allclose(
+            profiles["profiles"]["DMerc"]["flux_normalized"],
+            Wout.DMerc * 0.02**2,
+        )
+        np.testing.assert_allclose(
+            profiles["profiles"]["DWell"]["flux_normalized"],
+            Wout.DWell * 0.02**2,
+        )
+        s_half, values = vmec_half_grid_profile(Wout.DMerc)
+        np.testing.assert_allclose(s_half, [0.25, 0.75])
+        np.testing.assert_allclose(values, [-2.0, 3.0])
+        summary = mercier_summary(Wout(), s_min=0.2, s_max=0.3)
+        self.assertAlmostEqual(summary["dmerc_vmec_raw_min"], -2.0)
+        self.assertAlmostEqual(summary["dmerc_flux_normalized_min"], -0.0008)
+        self.assertAlmostEqual(summary["minimum_s"], 0.25)
+        self.assertEqual(summary["dmerc_negative_count"], 1)
+
+    def test_mercier_flux_normalization_rejects_missing_phi(self):
+        from squid.diagnostics.mercier_normalization import edge_toroidal_flux_wb
+
+        class Wout:
+            DMerc = np.array([1.0])
+
+        with self.assertRaises(KeyError):
+            edge_toroidal_flux_wb(Wout())
 
     def test_generate_initial(self):
         from squid.utils.generate_initial import generate_boundary
@@ -137,8 +220,42 @@ class TestCoreModules(unittest.TestCase):
         self.assertEqual(args.mode, "maxj_repair")
         self.assertAlmostEqual(args.w_maxj, MODE_PRESETS["maxj_repair"]["w_maxj"])
 
+    def test_optimize_rejects_ambiguous_legacy_mercier_config(self):
+        from scripts.optimize import (
+            MODE_PRESETS,
+            _build_parser,
+            _reject_legacy_mercier_config,
+        )
+
+        parser = _build_parser(MODE_PRESETS["core"].copy())
+        with self.assertRaises(SystemExit):
+            _reject_legacy_mercier_config({"hard_dmerc_min": 0.1}, parser)
+
+    def test_optimize_refuses_nonempty_run_directory(self):
+        from argparse import Namespace
+        from pathlib import Path
+        import tempfile
+
+        from squid.cli.optimize import _write_resolved_parameters
+
+        with tempfile.TemporaryDirectory() as directory:
+            run_dir = Path(directory) / "existing"
+            run_dir.mkdir()
+            (run_dir / "history.csv").write_text("old run\n", encoding="utf-8")
+            args = Namespace(
+                run_name="test",
+                run_dir=str(run_dir),
+                mode="core",
+                nc_file="seed.nc",
+                vmec_input_file=None,
+                input_parameter=None,
+                overwrite_run_dir=False,
+            )
+            with self.assertRaises(FileExistsError):
+                _write_resolved_parameters(args, {})
+
     def test_iota_rational_scan_reports_nearest_low_order(self):
-        from scripts.diagnose import _scan_iota_rationals
+        from squid.cli.diagnose import _scan_iota_rationals
 
         class Wout:
             iotaf = np.array([-0.42, -0.45, -0.50, -0.56])
@@ -158,6 +275,84 @@ class TestCoreModules(unittest.TestCase):
         self.assertEqual(scan["nearest_low_order"]["rational"], "-1/2")
         self.assertLessEqual(scan["nearest_low_order"]["distance"], 1e-12)
         self.assertGreaterEqual(len(scan["near_low_order"]), 1)
+
+
+    def test_iota_topology_residuals_accept_reference_profile(self):
+        from squid.objectives.iota_topology import iota_topology_residuals
+
+        sample_s = np.linspace(0.1, 0.9, 9)
+        reference = 0.29 + 0.07 * sample_s
+        result = iota_topology_residuals(
+            0.29 + 0.07 * np.linspace(0.0, 1.0, 33),
+            reference_iota=reference, sample_s=sample_s,
+            shear_absmin=0.005, reference_direction=1.0,
+        )
+        np.testing.assert_allclose(result["profile_residuals"], 0.0, atol=1e-12)
+        np.testing.assert_allclose(result["shear_residuals"], 0.0, atol=1e-12)
+        np.testing.assert_allclose(result["monotonic_residuals"], 0.0, atol=1e-12)
+
+    def test_iota_topology_residuals_reject_flat_and_reversed_profile(self):
+        from squid.objectives.iota_topology import iota_topology_residuals
+
+        sample_s = np.linspace(0.1, 0.9, 9)
+        reference = 0.29 + 0.07 * sample_s
+        flat = iota_topology_residuals(
+            np.full(33, 0.32), reference_iota=reference, sample_s=sample_s,
+            shear_absmin=0.005, reference_direction=1.0,
+        )
+        reversed_profile = iota_topology_residuals(
+            0.36 - 0.05 * np.linspace(0.0, 1.0, 33),
+            reference_iota=reference, sample_s=sample_s,
+            shear_absmin=0.005, reference_direction=1.0,
+        )
+        self.assertGreater(np.max(flat["shear_residuals"]), 0.0)
+        self.assertGreater(np.max(reversed_profile["monotonic_residuals"]), 0.0)
+        self.assertGreater(reversed_profile["metrics"]["monotonic_violation_count"], 0)
+
+
+class TestMercierNamingContract(unittest.TestCase):
+    """Keep ambiguous and legacy Mercier names out of production code."""
+
+    def test_active_code_uses_explicit_mercier_names(self):
+        repo_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        forbidden = (
+            "dmerc_scaled",
+            "scaled_DMerc",
+            "DMerc_min_gated",
+            "dmerc_b0sq_legacy",
+        )
+        offenders = []
+        for relative_root in ("scripts", "squid"):
+            search_root = os.path.join(repo_root, relative_root)
+            for root, _, filenames in os.walk(search_root):
+                for filename in filenames:
+                    if not filename.endswith(".py"):
+                        continue
+                    path = os.path.join(root, filename)
+                    relative_path = os.path.relpath(path, repo_root)
+                    with open(path, "r", encoding="utf-8") as handle:
+                        lines = handle.readlines()
+                    for line_number, line in enumerate(lines, start=1):
+                        for token in forbidden:
+                            if token not in line:
+                                continue
+                            is_rejected_legacy_key = (
+                                relative_path in (
+                                    os.path.join("scripts", "optimize.py"),
+                                    os.path.join("squid", "cli", "optimize.py"),
+                                )
+                                and line.strip() == '"dmerc_scaled_min": None,'
+                            )
+                            if not is_rejected_legacy_key:
+                                offenders.append(
+                                    f"{relative_path}:{line_number}: {token}"
+                                )
+        self.assertEqual(
+            offenders,
+            [],
+            "Ambiguous Mercier names are forbidden; use dmerc_vmec_raw_* or "
+            "dmerc_flux_normalized_* explicitly:\n" + "\n".join(offenders),
+        )
 
 
 class TestWithVMEC(unittest.TestCase):
@@ -209,8 +404,10 @@ class TestWithVMEC(unittest.TestCase):
             num_pitch=10,
         )
         r = mj.residuals()
-        self.assertEqual(r.shape, (1,))
-        self.assertGreaterEqual(r[0], 0.0)
+        expected_size = (len(mj.s_vals) - 1) * mj.num_pitch * mj.num_alpha
+        self.assertEqual(r.shape, (expected_size,))
+        self.assertTrue(np.all(r >= 0.0))
+        self.assertAlmostEqual(float(np.sum(r**2)), mj.total(), places=12)
 
     @_skip_if_no_wout
     def test_itg_residual_vacuum(self):
@@ -255,6 +452,23 @@ class TestWithVMEC(unittest.TestCase):
         self.assertEqual(len(zeta), 200)
         self.assertEqual(len(B_I), 200)
         self.assertTrue(np.all(np.isfinite(B_I)))
+
+    def test_physical_report_rational_labels_are_signed(self):
+        from squid.cli.diag.physical_diagnostics_report import _dangerous_rationals
+
+        labels = {label for _, label, _ in _dangerous_rationals(nfp=3, m_max=12)}
+        self.assertIn("-1/3", labels)
+        self.assertIn("1/3", labels)
+        self.assertIn("-2/7", labels)
+
+    def test_physical_report_uses_vmec_half_grid(self):
+        from squid.diagnostics.mercier_normalization import (
+            vmec_half_grid_profile,
+        )
+
+        s, values = vmec_half_grid_profile(np.arange(5.0), ns=5)
+        np.testing.assert_allclose(s, [0.125, 0.375, 0.625, 0.875])
+        np.testing.assert_allclose(values, [1.0, 2.0, 3.0, 4.0])
 
 
 if __name__ == "__main__":

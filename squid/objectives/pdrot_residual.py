@@ -242,6 +242,103 @@ def principal_direction_rotation_rate(
     }
 
 
+
+def _weighted_quantile(values: Array, weights: Array, q: float) -> float:
+    values = np.asarray(values, dtype=float).ravel()
+    weights = np.asarray(weights, dtype=float).ravel()
+    mask = np.isfinite(values) & np.isfinite(weights) & (weights > 0.0)
+    if not np.any(mask):
+        return np.nan
+    values = values[mask]
+    weights = weights[mask]
+    order = np.argsort(values)
+    values = values[order]
+    weights = weights[order]
+    cdf = np.cumsum(weights) / np.sum(weights)
+    return float(np.interp(float(q) / 100.0, cdf, values))
+
+
+def _weighted_tail_mean(values: Array, weights: Array, top_fraction: float) -> float:
+    values = np.asarray(values, dtype=float).ravel()
+    weights = np.asarray(weights, dtype=float).ravel()
+    mask = np.isfinite(values) & np.isfinite(weights) & (weights > 0.0)
+    if not np.any(mask):
+        return np.nan
+    values = values[mask]
+    weights = weights[mask]
+    order = np.argsort(values)
+    values = values[order]
+    weights = weights[order]
+    tail_weight = float(top_fraction) * float(np.sum(weights))
+    if tail_weight <= 0.0:
+        return np.nan
+    remaining = tail_weight
+    weighted_sum = 0.0
+    for value, weight in zip(values[::-1], weights[::-1]):
+        take = min(float(weight), remaining)
+        weighted_sum += float(value) * take
+        remaining -= take
+        if remaining <= 1e-15:
+            break
+    return float(weighted_sum / tail_weight)
+
+
+def pdrot_area_weighted_stats(diag: Dict[str, Array | float]) -> Dict[str, float]:
+    """Return area-weighted scalar diagnostics for residual pdrot.
+
+    This is the preferred engineering-screening convention: regularized
+    principal-direction rotation rate with area-weighted quantiles.
+    """
+    pdrot_all = np.asarray(diag.get("pdrot", []), dtype=float)
+    weights_all = np.asarray(diag.get("area_weights", []), dtype=float)
+    q_all = np.asarray(diag.get("q", []), dtype=float)
+    if pdrot_all.size == 0 or weights_all.size != pdrot_all.size:
+        return {
+            "pdrot_mean": np.nan,
+            "pdrot_rms": np.nan,
+            "pdrot_median": np.nan,
+            "pdrot_p95": np.nan,
+            "pdrot_p99": np.nan,
+            "pdrot_p999": np.nan,
+            "pdrot_cvar1": np.nan,
+            "pdrot_max": np.nan,
+            "pdrot_q_mean": np.nan,
+            "pdrot_q_p95": np.nan,
+            "pdrot_a_eff": np.nan,
+            "pdrot_kappa_gap_max": np.nan,
+        }
+
+    pdrot = pdrot_all.ravel()
+    weights = weights_all.ravel()
+    mask = np.isfinite(pdrot) & np.isfinite(weights) & (weights > 0.0)
+    if not np.any(mask):
+        return pdrot_area_weighted_stats({})
+
+    pdrot = pdrot[mask]
+    weights = weights[mask]
+    q = q_all.ravel()[mask] if q_all.size == weights_all.size else np.asarray([])
+    total_weight = float(np.sum(weights))
+    mean_pdrot = float(np.sum(pdrot * weights) / total_weight)
+    mean_q = float(np.sum(q * weights) / total_weight) if q.size == pdrot.size else np.nan
+    return {
+        "pdrot_mean": mean_pdrot,
+        "pdrot_rms": float(np.sqrt(np.sum(pdrot * pdrot * weights) / total_weight)),
+        "pdrot_median": _weighted_quantile(pdrot, weights, 50.0),
+        "pdrot_p95": _weighted_quantile(pdrot, weights, 95.0),
+        "pdrot_p99": _weighted_quantile(pdrot, weights, 99.0),
+        "pdrot_p999": _weighted_quantile(pdrot, weights, 99.9),
+        "pdrot_cvar1": _weighted_tail_mean(pdrot, weights, 0.01),
+        "pdrot_max": float(np.max(pdrot)),
+        "pdrot_q_mean": mean_q,
+        "pdrot_q_p95": _weighted_quantile(q, weights, 95.0) if q.size == pdrot.size else np.nan,
+        "pdrot_a_eff": float(diag.get("a_eff", np.nan)),
+        "pdrot_kappa_gap_max": (
+            float(np.nanmax(np.asarray(diag["kappa_gap"], dtype=float)))
+            if "kappa_gap" in diag else np.nan
+        ),
+    }
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Penalty settings dataclass
 # ═══════════════════════════════════════════════════════════════════════════
@@ -253,10 +350,13 @@ class PDROTPenaltySettings:
 
     q_target: Optional[float] = None
     rho_target: Optional[float] = None
+    top_rho_target: Optional[float] = None
     mean_q_target: Optional[float] = None
     mean_rho_target: Optional[float] = None
     weight_q: float = 1.0
     weight_rho: float = 1.0
+    weight_top_rho: float = 0.0
+    top_fraction: float = 0.01
     weight_mean_q: float = 0.0
     weight_mean_rho: float = 0.0
     delta_kappa_a: float = 1.0e-3
@@ -267,6 +367,7 @@ class PDROTPenaltySettings:
         thresholds = {
             "q_target": self.q_target,
             "rho_target": self.rho_target,
+            "top_rho_target": self.top_rho_target,
             "mean_q_target": self.mean_q_target,
             "mean_rho_target": self.mean_rho_target,
         }
@@ -277,6 +378,7 @@ class PDROTPenaltySettings:
         weights = {
             "weight_q": self.weight_q,
             "weight_rho": self.weight_rho,
+            "weight_top_rho": self.weight_top_rho,
             "weight_mean_q": self.weight_mean_q,
             "weight_mean_rho": self.weight_mean_rho,
         }
@@ -286,12 +388,15 @@ class PDROTPenaltySettings:
 
         if self.delta_kappa_a < 0.0:
             raise ValueError("delta_kappa_a must be non-negative.")
+        if not np.isfinite(self.top_fraction) or not (0.0 < self.top_fraction <= 1.0):
+            raise ValueError("top_fraction must be in (0, 1].")
         if self.smooth_eps_q < 0.0 or self.smooth_eps_rho < 0.0:
             raise ValueError("Smoothing epsilons must be non-negative.")
 
         active = (
             self.q_target is not None and self.weight_q > 0.0,
             self.rho_target is not None and self.weight_rho > 0.0,
+            self.top_rho_target is not None and self.weight_top_rho > 0.0,
             self.mean_q_target is not None and self.weight_mean_q > 0.0,
             self.mean_rho_target is not None and self.weight_mean_rho > 0.0,
         )
@@ -329,6 +434,40 @@ def pdrot_residuals(surface, settings: PDROTPenaltySettings) -> Array:
             np.sqrt(settings.weight_rho * area_weights).ravel()
             * excess_rho.ravel()
         )
+
+    if settings.top_rho_target is not None and settings.weight_top_rho > 0.0:
+        excess_top = _positive_part(
+            pdrot - settings.top_rho_target, settings.smooth_eps_rho
+        ).ravel()
+        weights_top = area_weights.ravel()
+        mask_top = np.isfinite(excess_top) & np.isfinite(weights_top) & (weights_top > 0.0)
+        top_residual = np.zeros_like(excess_top, dtype=float)
+        if np.any(mask_top):
+            excess_valid = excess_top[mask_top]
+            weights_valid = weights_top[mask_top]
+            order = np.argsort(excess_valid)[::-1]
+            excess_sorted = excess_valid[order]
+            weights_sorted = weights_valid[order]
+            tail_weight = settings.top_fraction * float(np.sum(weights_valid))
+            take = np.cumsum(weights_sorted) <= max(tail_weight, 0.0)
+            if not np.any(take):
+                take[0] = True
+            valid_idx = np.flatnonzero(mask_top)
+            selected = valid_idx[order[take]]
+            selected_weight_sum = float(np.sum(weights_top[selected]))
+            top_residual[selected] = (
+                np.sqrt(
+                    settings.weight_top_rho
+                    * weights_top[selected]
+                    / max(selected_weight_sum, 1e-12)
+                )
+                * excess_top[selected]
+            )
+        else:
+            top_residual = np.sqrt(
+                settings.weight_top_rho / max(excess_top.size, 1)
+            ) * excess_top
+        residual_blocks.append(top_residual)
 
     if settings.mean_q_target is not None and settings.weight_mean_q > 0.0:
         mean_q_excess = _positive_part(
@@ -371,9 +510,10 @@ def compute_pdrot_from_vmec(vmec, args):
 
     q_target = getattr(args, "pdrot_q_target", None) or None
     rho_target = getattr(args, "pdrot_rho_target", None) or None
+    top_rho_target = getattr(args, "pdrot_top_rho_target", None) or None
 
     # Fast path: if no targets are set, return zero residual with diagnostics only
-    if q_target is None and rho_target is None:
+    if q_target is None and rho_target is None and top_rho_target is None:
         try:
             diag = principal_direction_rotation_rate(surf)
         except Exception:
@@ -384,8 +524,11 @@ def compute_pdrot_from_vmec(vmec, args):
     settings = PDROTPenaltySettings(
         q_target=q_target,
         rho_target=rho_target,
+        top_rho_target=top_rho_target,
         weight_q=max(float(getattr(args, "pdrot_weight_q", 1.0) or 1.0), 0.0),
         weight_rho=max(float(getattr(args, "pdrot_weight_rho", 1.0) or 1.0), 0.0),
+        weight_top_rho=max(float(getattr(args, "pdrot_weight_top_rho", 0.0) or 0.0), 0.0),
+        top_fraction=float(getattr(args, "pdrot_top_fraction", 0.01) or 0.01),
         mean_q_target=getattr(args, "pdrot_mean_q_target", None) or None,
         mean_rho_target=getattr(args, "pdrot_mean_rho_target", None) or None,
         weight_mean_q=max(float(getattr(args, "pdrot_weight_mean_q", 0.0) or 0.0), 0.0),
@@ -409,15 +552,5 @@ def compute_pdrot_from_vmec(vmec, args):
 
 
 def _build_metrics(diag):
-    """Extract scalar diagnostics from a pdrot computation result."""
-    pdrot_arr = np.asarray(diag.get("pdrot", []))
-    return {
-        "pdrot_mean": float(diag.get("mean_pdrot", np.nan)),
-        "pdrot_max": float(np.max(pdrot_arr)) if pdrot_arr.size else np.nan,
-        "pdrot_p95": float(diag.get("p95_pdrot", np.nan)),
-        "pdrot_p99": float(np.percentile(pdrot_arr, 99)) if pdrot_arr.size else np.nan,
-        "pdrot_q_mean": float(diag.get("mean_q", np.nan)),
-        "pdrot_q_p95": float(diag.get("p95_q", np.nan)),
-        "pdrot_a_eff": float(diag.get("a_eff", np.nan)),
-        "pdrot_kappa_gap_max": float(np.max(diag["kappa_gap"])) if diag else np.nan,
-    }
+    """Extract area-weighted scalar diagnostics from a pdrot computation."""
+    return pdrot_area_weighted_stats(diag)

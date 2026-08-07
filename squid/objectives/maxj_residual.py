@@ -185,6 +185,8 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
     ns = len(s_vals)
     na = len(alphas)
     np_ = num_pitch
+    lambda_grid = np.linspace(1.0 / (np_ + 1), np_ / (np_ + 1), np_)
+    interval_centers = 0.5 * (np.asarray(s_vals[:-1]) + np.asarray(s_vals[1:]))
 
     vmec_iotaf = np.array(vmec_ro.wout.iotaf)
     iota_axis = float(vmec_iotaf[0])
@@ -226,6 +228,9 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
                     maxj_residuals=np.array([1e3]),
                     qi_residuals=np.array([1e3]),
                     bmin_residuals=np.array([1e3]),
+                    maxj_exceedance_blocks=np.zeros((max(ns - 1, 0), np_, na)),
+                    maxj_interval_centers=interval_centers,
+                    maxj_lambda_grid=lambda_grid,
                     iota_axis=iota_axis, iota_edge=iota_edge,
                     B_min=global_Bmin, B_max=global_Bmax,
                     surface_Bmin=np.asarray(surface_Bmin),
@@ -244,6 +249,7 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
 
     # f_maxJ (Eqs. 6-7)
     maxj_chunks = []
+    maxj_exceedance_blocks = []
     for k in range(ns - 1):
         ds = s_vals[k + 1] - s_vals[k]
         J_lo, J_hi = JC_int[k], JC_int[k + 1]
@@ -252,7 +258,9 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
             denom = 1e-30
         diff = J_hi[:, :, None] - J_lo[:, None, :]
         mean_dJ = (diff / (ds * denom)).mean(axis=-1)
-        maxj_chunks.append(np.maximum(0.0, mean_dJ - T_J).ravel())
+        exceedance = np.maximum(0.0, mean_dJ - T_J)
+        maxj_chunks.append(exceedance.ravel())
+        maxj_exceedance_blocks.append(exceedance)
     maxj_raw_residuals = (
         np.concatenate(maxj_chunks) if maxj_chunks else np.zeros(0)
     )
@@ -280,6 +288,12 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
         maxj_residuals=maxj_residuals,
         qi_residuals=qi_residuals,
         bmin_residuals=bmin_residuals,
+        maxj_exceedance_blocks=(
+            np.asarray(maxj_exceedance_blocks)
+            if maxj_exceedance_blocks else np.zeros((0, np_, na))
+        ),
+        maxj_interval_centers=interval_centers,
+        maxj_lambda_grid=lambda_grid,
         mirror_ratio=mirror_ratio,
         iota_axis=iota_axis, iota_edge=iota_edge,
         B_min=global_Bmin, B_max=global_Bmax,

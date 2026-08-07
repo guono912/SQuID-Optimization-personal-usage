@@ -1,70 +1,75 @@
-# Skill 05 — Coil Feasibility Workflow
+# Skill 05 - Coil-Side Proxies and Handoff
 
-Three levels, increasing fidelity. Never promote on level 1 alone.
+SQuID does not replace the coil group's detailed design workflow. Its role is
+to avoid handing over obviously hostile plasma boundaries and to measure how
+coil realization changes the plasma physics.
 
-## Level 1 — inner-loop coil proxy (inside optimize.py)
+## Evidence hierarchy
 
-`w_coil_proxy_bn / w_coil_proxy_k` with low resolution
-(M_Phi=N_Phi=4, source/eval 16). Biases the search away from
-coil-impossible shapes. Its Bn numbers are NOT comparable to level 2
-absolute values; treat as steering only.
+### 1. Boundary geometry diagnostics
 
-## Level 2 — current-potential scan (REGCOIL-like)
+pdrot, principal curvatures, curvature tails, and singular-area fractions
+locate difficult surface regions. They are not coil-manufacturability scores.
+Use them for local repair guidance and regression monitoring.
 
-```bash
-python scripts/coil_feasibility_gate.py \
-  --wout <wout.nc> --output_dir <dir> \
-  --offsets 0.35 --lambdas 1e-8 \
-  --M_Phi 6 --N_Phi 6 --desc_L 6 --desc_M 6 --desc_N 6 \
-  --source_M 24 --source_N 24 --eval_M 24 --eval_N 24
-```
+### 2. Inner-loop current-potential proxy
 
-Standard comparison protocol (do not change when comparing branches):
-constant-normal winding surface at offset `0.35a`, `lambda = 1e-8`,
-regcoil regularization, helicity (1,0). Record `Bn_max_abs_unitless`
-(= Bn_max/|B|), `Bn_rms_unitless`, `K_rms`, `phi_high_mode_fraction`.
+`w_coil_proxy_bn`, `w_coil_proxy_k`, and related low-resolution objectives can
+steer optimization away from poor winding-surface response. Their absolute
+numbers are optimizer-protocol dependent and must not be compared with a
+separate REGCOIL or filamentary calculation.
 
-Guardrails (same-protocol comparisons, not universal physics):
-
-- `Bn_max/|B| <= 3.4e-3` (route1-derived guardrail; desc_seed currently
-  ~3.6e-3, route2 blocked at ~4.16e-3)
-- pseudoinverse fallback after singular-system detection is logged — note
-  it in results; tiny lambdas (< 1e-10) are numerically fragile.
-
-## Level 3 — TRUE coil contours (the deciding engineering metric)
+### 3. Fixed-protocol current-potential evaluation
 
 ```bash
-python scripts/coil_contour_metrics.py \
-  --wout <wout.nc> --output_dir <dir> \
-  --offset 0.35 --lambda_regularization 1e-14 --num_coils 4
+PY=/home/guozx/fusion_env/bin/python
+$PY scripts/gate/coil_feasibility_gate.py \
+  --wout <wout.nc> --output_dir <run>/coil_proxy \
+  --offsets <fixed_values> --lambdas <fixed_values>
 ```
 
-Reports per-coil length, curvature (mean/rms/max/p95), min coil-plasma
-distance, min coil-coil distance, plus a 3D plot. Decision rules:
+Record normalized normal-field error, current-density norms/tails, spectral
+content, winding-surface definition, regularization, and all resolutions.
+Compare candidates only within the same named protocol.
 
-- `curvature_max` is the primary scalar guardrail (campaign reference
-  values: route1 ~8.96, route2 ~8.86, desc_seed ~8.27-8.30 — lower better).
-- `min_coil_plasma_distance`: watch closely at R=2.35/a~0.22; values
-  ~0.064 m (~0.3a) leave little room for conductor + casing + first wall.
-  Treat < 0.06 m as a blocker, 0.06-0.08 m as a warning.
-- Coil length < 5 m, `Bmax <= 3.1 T` (final-size checks).
-- A lower-Bn point that worsens true contour curvature is NOT an
-  improvement (route2 offset-0.30 lesson: Bn 4.07e-3 but curvature 10.7
-  and d_plasma 0.047 m — rejected).
+### 4. Filamentary coils and coil-return equilibrium
 
-## Known-exhausted moves (do not repeat)
+This is the decisive physical realization test. Compare target and coil-return
+equilibria using the same diagnostic protocols. Normal-field error alone is
+not sufficient: a spatially concentrated resonant error can damage iota,
+Mercier/DGeod, ripple, or islands despite a good global RMS.
 
-- Offset/lambda/M_Phi-N_Phi grid scans to fix route2 `Bn_max` — done
-  (M4/N4 and M5/N5); best 4.07e-3 at unacceptable geometry. Next attempts
-  must change the method: optimized (non-offset) winding surface,
-  localized boundary repair driven by the Bn hotspot map, or true
-  filamentary coil optimization (e.g. simsopt) used as the gate.
-- Improving `pdrot_max` while true contour curvature worsens
-  (stage05/eval012 lesson).
+## Physics-side requirements to give the coil group
 
-## Proxy-calibration task (open)
+Provide:
 
-The 3.4e-3 Bn guardrail is inherited from route1, not validated against a
-real coil design. When a real filament/REGCOIL workflow result is
-available for any branch, recalibrate the guardrail and update this file
-and GUIDELINES.md.
+- target equilibrium hash and exact operating point;
+- allowed normal-field error protocol and hotspot maps;
+- protected iota profile/shear and listed rational surfaces;
+- acceptable degradation bands for Mercier, ballooning, ripple, and ITG;
+- plasma/coil clearance envelope and any forbidden boundary changes;
+- required coil-return/free-boundary reconstruction cases;
+- perturbation cases for manufacturing and assembly tolerance studies.
+
+Do not prescribe the coil group's conductor, support, stress, cooling,
+power-supply, or assembly solution unless the task explicitly includes those
+engineering models.
+
+## Robustness loop
+
+For each serious target:
+
+1. generate a nominal coil solution;
+2. compute its coil-return equilibrium;
+3. evaluate the same physics vector as the target;
+4. perturb coil positions, currents, and allowed manufacturing errors;
+5. identify which resonant or geometric error components drive physics loss;
+6. feed a robustness objective or sensitivity map back to boundary design;
+7. repeat until the target is not dependent on an unrealistically exact coil.
+
+## Decision rule
+
+Use boundary metrics as warnings, current-potential metrics as intermediate
+evidence, and coil-return/perturbation physics as the deciding evidence. A
+smaller global `Bn` that worsens resonant response or coil-return stability is
+not an improvement.

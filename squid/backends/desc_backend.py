@@ -25,6 +25,12 @@ from ..objectives.qi_residual import (
 )
 from ..objectives.itg_residual import ITGResidual
 from ..objectives.penalties import bmin_slope_residuals, hinge_loss
+from ..diagnostics.mercier_normalization import (
+    MERCIER_CONVENTION_VERSION,
+    edge_toroidal_flux_wb,
+    flux_normalize_mercier,
+    vmec_half_grid_profile,
+)
 
 INVALID = 1.0e6
 INVALID_TOTAL = 1.0e10
@@ -128,7 +134,9 @@ def run_desc(args):
     history_fields = [
         "eval", "f_QI", "f_maxJ", "f_Bmin", "mirror_ratio",
         "iota_axis", "iota_edge", "beta", "f_grad_s", "f_highB",
-        "well_depth", "dmerc_min", "dmerc_negative_count",
+        "well_depth", "dmerc_convention", "dmerc_edge_toroidal_flux_wb",
+        "dmerc_vmec_raw_min", "dmerc_flux_normalized_min",
+        "dmerc_negative_count",
         "balloon_n_pos", "balloon_lam_max", "aspect", "fb_rms", "elapsed_s",
     ]
     with open(history_path, "w", newline="") as fh:
@@ -163,7 +171,11 @@ def run_desc(args):
             iota_axis=kw.get("iota_ax"), iota_edge=kw.get("iota_ed"),
             beta=kw.get("beta"), f_grad_s=kw.get("f_gs", 0.0),
             f_highB=kw.get("f_highB", 0.0),
-            well_depth=kw.get("well"), dmerc_min=kw.get("dmerc_min"),
+            well_depth=kw.get("well"),
+            dmerc_convention=MERCIER_CONVENTION_VERSION,
+            dmerc_edge_toroidal_flux_wb=kw.get("dmerc_edge_toroidal_flux_wb"),
+            dmerc_vmec_raw_min=kw.get("dmerc_vmec_raw_min"),
+            dmerc_flux_normalized_min=kw.get("dmerc_flux_normalized_min"),
             dmerc_negative_count=kw.get("dmerc_neg"),
             balloon_n_pos=kw.get("balloon_n"),
             balloon_lam_max=kw.get("balloon_lam"),
@@ -324,24 +336,34 @@ def run_desc(args):
                 f_gs = INVALID
 
         # ── 12. Mercier margin (from VMEC wout — DESC-saved) ──
-        dmerc_min = np.nan
+        dmerc_vmec_raw_min = np.nan
+        dmerc_flux_normalized_min = np.nan
+        dmerc_edge_toroidal_flux_wb = np.nan
         dmerc_neg = 0
         f_mercier_margin = 0.0
         w_mm = getattr(args, 'w_mercier_margin', 0.0)
-        if w_mm > 0:
+        if w_mm > 0 or getattr(args, 'hard_gate_mhd', False):
             try:
-                dmerc = np.array(vmec_ro.wout.DMerc, dtype=float)
-                ns_dm = len(dmerc)
-                s_dm = np.linspace(0.0, 1.0, ns_dm)
+                dmerc_raw_full = np.array(vmec_ro.wout.DMerc, dtype=float)
+                dmerc_full = flux_normalize_mercier(dmerc_raw_full, vmec_ro.wout)
+                dmerc_edge_toroidal_flux_wb = edge_toroidal_flux_wb(vmec_ro.wout)
+                s_dm, dmerc_raw = vmec_half_grid_profile(dmerc_raw_full)
+                _, dmerc = vmec_half_grid_profile(
+                    dmerc_full, ns=dmerc_raw_full.size
+                )
                 mask = ((s_dm >= getattr(args, 'mercier_s_min', 0.1))
                         & (s_dm <= getattr(args, 'mercier_s_max', 0.95))
+                        & np.isfinite(dmerc_raw)
                         & np.isfinite(dmerc))
                 vals = dmerc[mask]
                 if vals.size > 0:
-                    target = float(getattr(args, 'mercier_margin_target', 0.0))
+                    target = float(getattr(
+                        args, 'mercier_flux_normalized_margin_target', 0.0
+                    ))
                     mm_res = np.maximum(target - vals, 0.0)
                     f_mercier_margin = float(np.mean(mm_res ** 2))
-                    dmerc_min = float(np.nanmin(vals))
+                    dmerc_flux_normalized_min = float(np.nanmin(vals))
+                    dmerc_vmec_raw_min = float(np.nanmin(dmerc_raw[mask]))
                     dmerc_neg = int(np.sum(vals < 0))
             except Exception:
                 f_mercier_margin = INVALID
@@ -363,7 +385,7 @@ def run_desc(args):
         balloon_lam = np.nan
         f_ballooning = 0.0
         w_bal = getattr(args, 'w_ballooning', 0.0)
-        if w_bal > 0:
+        if w_bal > 0 or getattr(args, 'hard_gate_mhd', False):
             try:
                 from desc.objectives import BallooningStability
                 lam_target = float(getattr(args, "ballooning_lambda_target", 0.0))
@@ -387,13 +409,22 @@ def run_desc(args):
                 f_ballooning = float(np.mean(np.array(lam_residuals, dtype=float) ** 2))
             except Exception as exc:
                 f_ballooning = 1e4
+                balloon_n = -1
+                balloon_lam = np.nan
                 print(f"    [DESC #{n_eval[0]}] Ballooning FAILED: {exc}")
 
         # ── 15. Force-balance RMS (diagnostic, cheap) ──
         fb_rms = np.nan
         w_fb = getattr(args, 'w_force_balance', 0.0)
         f_fb = 0.0
-        if w_fb > 0:
+        hard_fb_limit = float(getattr(args, 'hard_fb_rms_max', np.inf))
+        if (
+            w_fb > 0
+            or (
+                getattr(args, 'hard_gate_mhd', False)
+                and np.isfinite(hard_fb_limit)
+            )
+        ):
             try:
                 from desc.objectives import ForceBalance as _ForceBalance
                 _fb_obj = _ForceBalance(eq=eq)
@@ -421,10 +452,14 @@ def run_desc(args):
         hard_gate_penalty = 0.0
         hard_gate_reasons = []
         if getattr(args, 'hard_gate_mhd', False):
-            dmerc_floor = float(getattr(args, 'hard_dmerc_min', 0.0))
+            dmerc_floor = float(getattr(
+                args, 'hard_dmerc_flux_normalized_min', 0.0
+            ))
             dmerc_neg_max = int(getattr(args, 'hard_dmerc_neg_max', 0))
-            if (not np.isfinite(dmerc_min)) or dmerc_min < dmerc_floor:
-                hard_gate_penalty += INVALID_TOTAL * (1.0 + max(dmerc_floor - (dmerc_min if np.isfinite(dmerc_min) else -1.0), 0.0))
+            if ((not np.isfinite(dmerc_flux_normalized_min))
+                    or dmerc_flux_normalized_min < dmerc_floor):
+                current = dmerc_flux_normalized_min if np.isfinite(dmerc_flux_normalized_min) else -1.0
+                hard_gate_penalty += INVALID_TOTAL * (1.0 + max(dmerc_floor - current, 0.0))
                 hard_gate_reasons.append("DMerc")
             if dmerc_neg > dmerc_neg_max:
                 hard_gate_penalty += INVALID_TOTAL * (1.0 + dmerc_neg - dmerc_neg_max)
@@ -432,21 +467,33 @@ def run_desc(args):
 
             bal_n_max = int(getattr(args, 'hard_ballooning_n_max', 0))
             bal_lam_max = float(getattr(args, 'hard_ballooning_lambda_max', 0.0))
-            if balloon_n > bal_n_max:
+            if balloon_n < 0:
+                hard_gate_penalty += INVALID_TOTAL
+                hard_gate_reasons.append("balloon_failed")
+            elif balloon_n > bal_n_max:
                 hard_gate_penalty += INVALID_TOTAL * (1.0 + balloon_n - bal_n_max)
                 hard_gate_reasons.append("balloon_n")
-            if np.isfinite(balloon_lam) and balloon_lam > bal_lam_max:
+            if not np.isfinite(balloon_lam):
+                hard_gate_penalty += INVALID_TOTAL
+                hard_gate_reasons.append("balloon_lam_failed")
+            elif balloon_lam > bal_lam_max:
                 hard_gate_penalty += INVALID_TOTAL * (1.0 + balloon_lam - bal_lam_max)
                 hard_gate_reasons.append("balloon_lam")
 
             beta_max = float(getattr(args, 'hard_beta_max', np.inf))
-            if np.isfinite(beta) and beta > beta_max:
-                hard_gate_penalty += INVALID_TOTAL * (1.0 + beta - beta_max)
+            if np.isfinite(beta_max) and (
+                (not np.isfinite(beta)) or beta > beta_max
+            ):
+                excess = beta - beta_max if np.isfinite(beta) else 1.0
+                hard_gate_penalty += INVALID_TOTAL * (1.0 + max(excess, 0.0))
                 hard_gate_reasons.append("beta")
 
-            fb_max = float(getattr(args, 'hard_fb_rms_max', np.inf))
-            if np.isfinite(fb_rms) and fb_rms > fb_max:
-                hard_gate_penalty += INVALID_TOTAL * (1.0 + fb_rms / max(fb_max, 1.0))
+            fb_max = hard_fb_limit
+            if np.isfinite(fb_max) and (
+                (not np.isfinite(fb_rms)) or fb_rms > fb_max
+            ):
+                ratio = fb_rms / max(fb_max, 1.0) if np.isfinite(fb_rms) else 1.0
+                hard_gate_penalty += INVALID_TOTAL * (1.0 + ratio)
                 hard_gate_reasons.append("FB")
 
         # ── Assemble total ──
@@ -483,7 +530,10 @@ def run_desc(args):
         if w_highB > 0:
             parts.append(f"f_highB={f_highB:.3e}")
         if w_mm > 0:
-            parts.append(f"DMerc={dmerc_min:.2e}({dmerc_neg}n)")
+            parts.append(
+                f"PhiEdge^2*DMerc={dmerc_flux_normalized_min:.2e}"
+                f"({dmerc_neg}n)"
+            )
         if not np.isnan(fb_rms):
             parts.append(f"FB={fb_rms:.1e}")
         if hard_gate_reasons:
@@ -496,7 +546,10 @@ def run_desc(args):
             delta=delta, iota_ax=iota_ax, iota_ed=iota_ed,
             beta=beta, f_gs=f_gs, well=well_depth,
             f_highB=f_highB,
-            dmerc_min=dmerc_min, dmerc_neg=dmerc_neg,
+            dmerc_edge_toroidal_flux_wb=dmerc_edge_toroidal_flux_wb,
+            dmerc_vmec_raw_min=dmerc_vmec_raw_min,
+            dmerc_flux_normalized_min=dmerc_flux_normalized_min,
+            dmerc_neg=dmerc_neg,
             balloon_n=balloon_n, balloon_lam=balloon_lam,
             aspect=aspect, fb_rms=fb_rms, dt=dt,
         )

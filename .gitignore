@@ -1,64 +1,48 @@
-# ignore python cache
+# Python caches and local tooling output
 __pycache__/
-*.pyc
+*.py[cod]
 .pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
 
-# ignore VMEC and large files generated during optimization
+# VMEC/SQuID products: every generated product belongs under runs/
 *.nc
+*.h5
+input.*
+threed1.*
+fort.*
+log.*
+jxbout_*.nc
+mercier.*
 simsopt_*.dat
 wout_*.txt
-input.squid_*
+parvmecinfo.txt
+timings.txt
+squid_diag*
 
-# ignore old code reference
+# Keep the run index visible while ignoring run products by default.
+runs/*
+!runs/README.md
+!runs/FILE_MANAGEMENT_GUIDELINES.md
+!runs/.gitkeep
+
+# Local archives and caches
 old_archive/
 artifacts/legacy_root/
 artifacts/old_archive/
-runs/*
-!runs/README.md
+temp_db/
+archive_*/
+tmp/
 
-# VMEC/SQuID 产生的临时文件
-fort.*
-log.*
-input.*
-wout_*.nc
-jxbout_*.nc
-threed1.*
-mercier.*
-
-# Python 缓存
-__pycache__/
-*.py[cod]
-*$py.class
-
-# 较大的二进制数据
-*.nc
-*.h5
-
-# Windows 系统产生的垃圾文件
+# OS-generated files
 *:Zone.Identifier
 *Zone.Identifier
 $RECYCLE.BIN/
 Desktop.ini
 
-
+# Local scratch notes (source tools are intentionally not ignored)
 in_file
 one_time.py
-parvmecinfo.txt
-squid_diag*
-timings.txt
-*.png
-
-# Local campaign caches and one-off archives
-/temp_db/
-/archive_*/
-/tmp/
-
-# Run-specific scratch notes and helpers
-/eng_pre.md
-/scripts/refine_qi.py
-
-# Common local tooling output
-.coverage
-htmlcov/
-.ruff_cache/
-.mypy_cache/
+eng_pre.md

@@ -1,68 +1,100 @@
-# Skill 04 — External Gates and Promotion Rules
+# Skill 04 - Independent Gates and Promotion
 
-## MHD gate (the promotion gate)
+Optimizer penalties steer a run. Promotion uses independently recomputed
+physics and engineering evidence.
 
-```bash
-python scripts/mhd_gate.py --wout <wout.nc> --output_dir <gate_dir> [--L 6 --M 6 --N 6]
-python scripts/gate_checkpoints.py --run_dir <stage_dir> [--watch]
-```
+## Three evaluation levels
 
-What it computes: VMEC sanity (ier, beta, iota, DMerc over s in
-[0.1, 0.97], well depth), DESC force-balance re-solve (L=M=N=6), DESC
-ballooning lambda on rho = {0.1,...,0.95} x 8 alphas (nturns=2,
-nzetaperturn=80, 5 zeta0), Nemov effective ripple on 9 surfaces.
-
-### Interpreting the verdict — IMPORTANT
-
-`verdict: PASS` only means: no negative DMerc points, `n_unstable <= 0`
-ballooning issues flagged, eps_eff <= 0.05, well >= 3%. It does NOT check:
-
-- `DMerc_min >= 0.08` (campaign promotion threshold) — check the JSON field
-  `vmec.DMerc_min_gated` yourself. Exploratory points may proceed with
-  `>= 0` but must be labeled exploratory.
-- Edge ballooning beyond rho = 0.95. Route1's limiting mode lived at the
-  rho=0.95 envelope; before promoting a marginal candidate, rerun the gate
-  with an extended rho list including 0.975 and 0.99 and >= 12 alphas.
-- Margin quality. Treat `lambda_max in (-2e-5, 0]` as MARGINAL, not stable;
-  pressure noise of 0.001% beta flips such points (route1 1.411 vs 1.412).
-
-### Promotion checklist (all must hold)
-
-1. `ier_flag = 0`, beta within 0.02% absolute of branch target (no silent drift).
-2. `DMerc_min_gated >= 0.08`, `DMerc_negative_count = 0`.
-3. Ballooning `n_unstable = 0` AND `lambda_max <= -2e-5` (margin, not zero),
-   confirmed on the extended-edge rho grid.
-4. `ripple_peak <= 0.025` (prefer <= 0.015 on the desc_seed branch where it
-   is cheaply available).
-5. Boozer high-B topology visually acceptable (`viz_report.py`), max-J not
-   edge/high-field concentrated.
-6. Fixed-protocol coil review acceptable (Skill 05).
-7. Gates rerun after any beta/profile/resolution/scale change.
-
-## Beta-ceiling scan (pressure-only)
-
-To find the ballooning ceiling of a FIXED boundary: copy the input, scale
-`PRES_SCALE` to a beta grid (e.g. 1.40/1.43/1.50/1.60), `xvmec` each, gate
-each. Record the first WARN. Remember the result is a property of that
-boundary; it is NOT the branch ceiling — co-evolving the boundary while
-ramping pressure can move it (route1 lesson: pressure-only ceiling 1.411%,
-and small low-order probes did not move it; a different repair
-parameterization is required).
-
-## Diagnosis (cheaper, not a gate)
+### Level 1: cheap diagnosis
 
 ```bash
-python scripts/diagnose.py --nc_file <wout.nc> --output_dir runs/diagnose_<case> --plot
-python scripts/viz_report.py ...   # HTML, Boozer maps, Newcomb, ITG proxy
+PY=/home/guozx/fusion_env/bin/python
+$PY scripts/diag/diagnose.py \
+  --nc_file <wout.nc> --output_dir <run>/diagnostics --plot
 ```
 
-Use `diagnose.py` JSON fields (`core.f_QI`, `maxj_interval_pass_ratio`,
-`stability.mercier_summary`, `geometry.iota_scan`, `ripple`) for steering;
-raw viz ballooning is a diagnostic and is overridden by the external gate.
+Use this to reject numerical failures and identify likely blockers. It is not
+the final force-balanced ballooning or coil-realization gate.
 
-## Bookkeeping
+### Level 2: physical report and visualization
 
-Gate outputs: `<gate_dir>/<stem>_<timestamp>_gate.json` + DESC `.h5`.
-Batch summary: `<stage>/gate_results/gate_summary.csv`. Copy the decisive
-numbers (beta, DMerc_min, lambda_max, n_unstable, ripple_peak, verdict)
-into STATUS.md when a decision is made.
+```bash
+$PY scripts/diag/physical_diagnostics_report.py \
+  --wout <wout.nc> --output_dir <run>/physical_report \
+  --diagnostics_json <run>/diagnostics/<report.json>
+
+$PY scripts/viz/viz_report.py \
+  --nc_file <wout.nc> --output_dir <run>/viz --nfp <NFP>
+```
+
+Use these for profiles, Mercier components, iota/rationals, Boozer structure,
+ripple, ITG, ballooning protocol checks, and reviewable figures.
+
+### Level 3: external MHD gate
+
+```bash
+$PY scripts/gate/mhd_gate.py \
+  --wout <wout.nc> --output_dir <run>/mhd_gate --L 6 --M 6 --N 6
+```
+
+This performs VMEC sanity checks, flux-normalized Mercier/well assessment,
+DESC force-balance fitting, ballooning, and effective ripple. Review CLI
+`--help` for the exact active radial/alpha protocol and any extended-edge
+option. A gate JSON is only comparable to another gate run with the same
+protocol.
+
+## Hard requirements
+
+Unless a campaign explicitly tightens them, promotion requires:
+
+- VMEC converged with finite, acceptably small force residuals;
+- no broken/self-intersecting boundary or unresolved geometry singularity;
+- `Phi_edge^2 * DMerc >= 0` and zero negative points on the declared body
+  interval, reproduced at final radial resolution;
+- no unstable ballooning points in the declared rho/alpha protocol;
+- finite effective-ripple calculation with an acceptable campaign threshold;
+- intended beta/current/pressure/iota operating point reproduced;
+- no unexplained transform sign flip or vanishing shear;
+- no unresolved high-risk rational response;
+- engineering evidence at the fidelity required by the campaign.
+
+There is no universal positive Mercier margin, ripple threshold, ballooning
+margin, or weight-independent QI score. Campaign targets must name the code,
+grid, radial mask, resolution, and reference calibration.
+
+## Resolution and robustness
+
+For a serious candidate:
+
+1. compare screening and final `ns` (normally at least 128; use 192 when
+   Mercier is marginal);
+2. repeat with higher `mpol/ntor` when spectral truncation is plausible;
+3. perturb beta, pressure-profile coefficients, and current around nominal;
+4. verify sign/margin conclusions do not depend on one sample crossing the
+   radial gate boundary;
+5. use the physical VMEC half-grid defined in Skill 09.
+
+## Rational surfaces
+
+The iota scan reports exposure, not island width. If a low-order surface is
+crossed, promotion requires a response study using the actual or perturbed
+coil field: resonant `B_mn`, Poincare/island analysis, and estimated island
+width where possible. Merely deleting a crossing from a scalar table is not a
+substitute for response robustness.
+
+## Promotion record
+
+Write to the run README/manifest:
+
+- parent and candidate hashes;
+- exact equilibrium state and operating point;
+- VMEC and diagnostic resolutions;
+- Mercier convention, radial interval, components, and minimum location;
+- ballooning/ripple protocol and result;
+- iota profile, shear, and rational response status;
+- confinement/ITG results used in the decision;
+- engineering protocol and result;
+- decision: promoted, retained control, or rejected, with reason.
+
+Never overwrite the parent or promote an evaluation-cap trial state without a
+separate converged rebuild and postcheck.

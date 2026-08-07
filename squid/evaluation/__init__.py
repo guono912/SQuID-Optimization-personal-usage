@@ -1,35 +1,36 @@
-"""Diagnostic evaluation and plotting for SQuID equilibria."""
+"""Diagnostic evaluation and plotting for SQuID equilibria.
 
-from .evaluate import (
-    evaluate_squid,
-    evaluate_itg,
-    plot_boozer_surface,
-    plot_squash_stretch,
-    plot_gradient_diagnostics,
-    plot_J_contours,
-)
-from .axis_geometry import (
-    axis_curvature_torsion,
-    axis_geometry_from_vmec,
-    plot_axis_geometry,
-)
-from .available_energy import (
-    available_energy,
-    ae_surface,
-    ae_diagnostics,
-)
+Names are exposed lazily (PEP 562) so importing a single submodule such as
+``squid.evaluation.gates`` does not eagerly pull the heavy evaluation chain
+(scipy/simsopt). ``from squid.evaluation import evaluate_squid`` still works
+when the optional dependencies are installed.
+"""
 
-__all__ = [
-    "evaluate_squid",
-    "evaluate_itg",
-    "plot_boozer_surface",
-    "plot_squash_stretch",
-    "plot_gradient_diagnostics",
-    "plot_J_contours",
-    "axis_curvature_torsion",
-    "axis_geometry_from_vmec",
-    "plot_axis_geometry",
-    "available_energy",
-    "ae_surface",
-    "ae_diagnostics",
-]
+import importlib
+
+_LAZY_EXPORTS = {
+    "evaluate_squid": ".evaluate",
+    "evaluate_itg": ".evaluate",
+    "plot_boozer_surface": ".evaluate",
+    "plot_squash_stretch": ".evaluate",
+    "plot_gradient_diagnostics": ".evaluate",
+    "plot_J_contours": ".evaluate",
+    "axis_curvature_torsion": ".axis_geometry",
+    "axis_geometry_from_vmec": ".axis_geometry",
+    "plot_axis_geometry": ".axis_geometry",
+    "available_energy": ".available_energy",
+    "ae_surface": ".available_energy",
+    "ae_diagnostics": ".available_energy",
+}
+
+__all__ = list(_LAZY_EXPORTS)
+
+
+def __getattr__(name):
+    module = _LAZY_EXPORTS.get(name)
+    if module is None:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    owner = importlib.import_module(module, __name__)
+    value = getattr(owner, name)
+    globals()[name] = value
+    return value

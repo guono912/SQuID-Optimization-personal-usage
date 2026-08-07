@@ -1,80 +1,89 @@
-# Skill 03 — Configuring and Running Optimization Stages
+# Skill 03 - Optimization Runs
 
-## Launching a stage
+## Launch from a reviewed config
 
 ```bash
 cd /home/guozx/SQuID
-python scripts/optimize.py --input_parameter runs/<campaign>/configs/<stage>.json
+PY=/home/guozx/fusion_env/bin/python
+$PY scripts/opt/optimize.py --input_parameter <campaign>/configs/<stage>.json
 ```
 
-Config JSON groups: `name, mode, nc_file, backend, run_dir, note`,
-`numerics{}`, `weights{}`, `targets{}`, `coil_proxy{}`, optional `gates{}`.
-The resolved argument set is always written to
-`<run_dir>/input_parameter.resolved.json` — use that for comparisons.
+The resolved configuration is written to
+`<run_dir>/input_parameter.resolved.json`. This file, not the template, is the
+authority for what ran.
 
-Modes (presets, overridable): `core`, `core_r2_assist`, `maxj_repair`,
-`engineering`, `edge_bal_repair`, `edge_bal_direct`.
+Current presets are `core`, `core_r2_assist`, `maxj_repair`, `engineering`,
+`edge_bal_repair`, and `edge_bal_direct`. Presets are starting points, not
+validated universal recipes.
 
-## Numerics defaults that worked in this campaign
+## Minimum config content
 
-```json
-"numerics": {
-  "maxiter": 4, "max_total_evals": 30-40, "max_dofs": 12-14,
-  "num_alpha": 6, "num_pitch": 24, "num_surfaces": 4, "ns_vmec": 64,
-  "abs_step": 5e-5, "checkpoint_every": 3, "dof_bound_frac": 0.012
-}
-```
+Declare:
 
-- `checkpoint_every` 2-3 for ANY new basin (a previous stage lost its best
-  point at an uncheckpointed eval).
-- `dof_bound_frac`: 0.003-0.006 guarded repair, 0.006-0.012 normal step,
-  larger only for deliberate basin hopping.
-- `max_dofs <= 24`; low-order modes move first.
+- parent `nc_file` or `vmec_input_file` and `run_dir`;
+- backend and preset;
+- numerical resolution, evaluation cap, checkpoint cadence, finite-difference
+  step, free mode limits, and shape bounds;
+- active weights and their physical purpose;
+- target values, hard guards, and radial protocols;
+- pressure/current/iota policy;
+- a one-sentence hypothesis for the run.
 
-## Weight guidance (per branch type)
+## Choose degrees of freedom deliberately
 
-Physics-first: `w_qi 0.8-1.0`, `w_maxj ~2`, `w_bmin ~1.2`, `w_well ~20`
-(target_well 0.04), `w_mercier_margin 20-35` (margin target 0.04-0.08),
-`w_iota` per goal, weak coil proxy (`w_coil_proxy_bn <= 200`).
+`max_dofs` is only a count. Inspect the printed free-DoF list and confirm the
+intended `(m,n)` families are present. Use `free_m_max/free_n_max`, shape
+anchors, and `dof_bound_frac` to define the local search.
 
-Coil repair: raise `w_coil_proxy_bn` to 300-400 with
-`coil_proxy_bn_max_target = 0.0034`, keep MHD terms on, keep
-`w_shape_anchor` strong to protect physics.
+Use low-order modes first for a local repair. Open higher modes only when a
+measured blocker requires them and geometry tails are guarded.
 
-Known traps:
+## Calibrate weights instead of copying them
 
-- `w_grad_s` strong (>= 2e-3) destroys QI/ballooning; safe 3e-4 - 8e-4.
-- `w_ballooning` (internal DESC ballooning penalty) is on a DIFFERENT
-  numerical scale than the external gate (stage07: internal residual
-  ~0.078 while external lambda ~1e-6). Do not expect internal ballooning
-  optimization to move the external gate; prefer gate-in-the-loop
-  checkpoint selection.
-- An iota target only acts outside `iota_tolerance`; combined with a strong
-  `w_shape_anchor` and small `dof_bound_frac` it can be a no-op
-  (stage02 desc_seed: iota_edge moved < 0.001 toward a 0.04 push).
-  To actually move iota: tolerance <= half the desired change, anchor
-  <= ~300, and enough evals/DoFs (or use `--prescribe_iota` for a
-  controlled experiment only).
+Objective scales depend on sampling, normalization, residual-vector length,
+and code version. Historical weights are evidence about one run, not defaults.
 
-## Monitoring a run
+For a new basin:
 
-- `history.csv` columns include per-eval `f_QI, f_maxJ, beta, iota_ax/edge,
-  well, dmerc proxy, coil proxy bn/k, aspect, wall time`. Penalties are
-  steering logs ONLY — never acceptance criteria.
-- Run the external gate watcher in parallel:
+1. evaluate the parent objective decomposition;
+2. perturb one control or mode family;
+3. measure target and guard responses;
+4. choose weights that make the intended response visible without overwhelming
+   hard guards;
+5. run a capped short probe before a long stage.
 
-  ```bash
-  python scripts/gate_checkpoints.py --run_dir runs/<campaign>/<stage> --watch
-  ```
+Keep one primary objective idea per probe. MHD sign, topology, beta/current
+identity, and numerical convergence should be hard guards where supported.
 
-- Stop a stage when 20-30 evals produce no new gate-passing improvement,
-  or when only low-iota/high-ripple points improve engineering metrics.
+## Monitoring
 
-## After a run
+`history.csv` is a steering log. Track:
 
-1. Gate ALL durable checkpoints (not just the final point).
-2. Select by external gates + fixed-protocol coil contour review
-   (Skill 04/05). If `pdrot` and true contour curvature conflict, true
-   contour curvature wins.
-3. Write a STATUS.md entry: config, seed, best checkpoints, gate numbers,
-   decision, blocker.
+- whether the named blocker moves;
+- beta, current, iota profile/shear, and rational crossings;
+- flux-normalized Mercier and components on the declared half-grid mask;
+- QI/max-J/Bmin/ripple or engineering proxy relevant to the hypothesis;
+- tail statistics, not only means or maxima;
+- VMEC failures and elapsed time.
+
+Checkpoint every few evaluations in a new basin. A final solver state after an
+evaluation-cap exception is not necessarily an accepted optimizer step.
+
+## Stop rules
+
+Stop and record the response when:
+
+- the blocker is flat across the evaluation budget;
+- improvement requires an MHD/topology/numerical failure;
+- geometry develops a non-convergent local tail;
+- the same failure survives a guarded and a wider parameterization;
+- the run drifts to another beta/current/profile policy.
+
+After two unproductive parameterizations, switch profile, control family, or
+seed instead of retuning weights indefinitely.
+
+## Postcheck
+
+Never rank directly from low-resolution history. Rebuild selected checkpoints
+at high radial and spectral resolution, then run Skills 04, 05, 08, and 09 as
+applicable. Record before/after values with identical protocols.

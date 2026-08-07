@@ -1,186 +1,212 @@
-# SQuID Stellarator Optimisation Skill
+# SQuID Agent Workflow
 
-Use this note as the working playbook for CLI agents helping with SQuID
-stellarator configuration optimisation.
+This is the canonical operating procedure for an Agent evaluating or
+optimizing a stellarator equilibrium with SQuID.
 
-## Baseline Workflow
+The objective is not to minimize every scalar. The objective is to identify
+the current blocker, choose a physically meaningful control, measure the
+response, and retain only candidates that survive independent checks.
 
-1. Keep the repository root clean. Write diagnostics and optimisation outputs
-   under `runs/<run-name>/`; historical files belong in `artifacts/`.
-2. Run a baseline diagnosis before changing optimisation targets:
+## 1. Establish provenance before computing
 
-   ```bash
-   python scripts/diagnose.py \
-     --nc_file <wout.nc> \
-     --output_dir runs/diagnose_<case> \
-     --plot
-   ```
+For every input equilibrium, record:
 
-3. Compare JSON reports, not screenshots alone. Important fields are:
-   `core.f_QI`, `core.f_maxJ`, `core.f_Bmin`,
-   `core.qi_surface_rms`, `core.maxj_interval_pass_ratio`,
-   `diagnostic_facts`, `stability.mercier_summary`,
-   `stability.well_summary`, `geometry.iota_scan`, `ripple`, and
-   `geometry.axis`.
-4. Only enable expensive transport diagnostics after the core geometry is
-   promising:
+- absolute path and SHA256;
+- source type: published target, fixed-boundary result, free-boundary result,
+  coil-return equilibrium, vacuum point, or finite-beta operating point;
+- NFP, `ns/mpol/ntor`, major/minor radius, aspect ratio, B0 proxy, beta;
+- `NCURR`, `CURTOR`, current profile, pressure profile, and `PHIEDGE`;
+- parent equilibrium and transformation used to create this file.
 
-   ```bash
-   python scripts/diagnose.py --nc_file <wout.nc> \
-     --output_dir runs/diagnose_<case> \
-     --extended --ae
-   ```
+Do not treat two files with similar names as the same configuration. See
+Skill 01 for paths and the run manifest rules.
 
-## Available Seed Sources
+## 2. Create an isolated run
 
-- Local historical equilibria are under `artifacts/legacy_root/`.
-- Near-axis/QSC-generated seed material is under `/home/guozx/pyqsc`, including
-  exported VMEC inputs in `/home/guozx/pyqsc/seed_vmec_exports/`.
-- Additional QSC-derived reference files are available at
-  `/home/guozx/constellaration/nc_files/wout_squid_optimized_qsc.nc` and the
-  matching HTML report.
+Use `/home/guozx/runs/YF_0` for the compact device and
+`/home/guozx/runs/YF_1` for the larger device.
 
-## Reading Diagnostics
+```text
+<project>/<campaign>/<run_id>/
+  equilibrium/
+  diagnostics/
+  viz/
+  logs/
+  manifest.json
+  README.md
+```
 
-The Python diagnostics should compute facts and cheap proxies. The agent, not
-the diagnostic script, decides how to adjust the next optimisation run.
+All solver output must stay in this tree. Never calculate from the repository
+root and later search for whichever `wout.nc` appeared.
 
-- High `f_QI` or high `core.qi_surface_rms` means the field strength is not
-  sufficiently omnigenous on the checked surfaces. Check `qi_surface_rms` to
-  identify the radial location before changing global weights.
-- Low max-J pass ratio means the second adiabatic invariant is not decreasing
-  outward enough. Check `maxj_interval_pass_ratio` and
-  `maxj_interval_worst_lambda`; shallow trapped particles often fail first.
-- Positive `f_Bmin` means `B_min(s)` is not growing outward at the target rate.
-  Increase `--w_bmin` or reduce shape changes that flatten the magnetic well.
-- A negative magnetic well depth is an engineering red flag even if QI/max-J
-  scores improve. Treat it as a stability constraint, not cosmetic output.
-- Ripple results can come from DESC, NEO-RT, or a Boozer proxy. Do not compare
-  values across sources as if they were identical physics metrics.
-- Check `geometry.iota_scan.nearest_low_order`,
-  `geometry.iota_scan.near_low_order`, and
-  `geometry.iota_scan.crossings` before changing iota-related weights. These
-  are facts relative to the configured denominator/distance thresholds, not an
-  automatic accept/reject decision.
-- Use `stability.mercier_summary.min`,
-  `stability.mercier_summary.negative_count`,
-  `stability.well_summary.edge`, and `stability.well_summary.min` as the cheap
-  VMEC stability facts available in the default diagnostic pass. Ballooning,
-  island-width, bootstrap-current, and high-fidelity turbulence conclusions
-  require heavier tools and should not be inferred from these proxies alone.
-
-## Parameter Adjustment Heuristics
-
-- Prefer `configs/*.json` over long command lines for optimisation runs:
-
-  ```bash
-  python scripts/optimize.py --input_parameter configs/core_r2_assist.json
-  ```
-
-  Command-line arguments are still allowed for one-off overrides. Every run
-  writes the final effective argument set to
-  `runs/<run-name>/input_parameter.resolved.json`; use that file when comparing
-  runs or preparing a commit.
-- Use `--mode core` for baseline fixed-boundary VMEC optimisation with simple
-  QI, max-J, B_min, aspect ratio, and regularisation.
-- Use `--mode core_r2_assist` when the simple QI score is already reasonable
-  and R2 should gently steer field-line structure. Keep R2 compressed
-  (`qi_r2_arr_out=false`) for optimisation.
-- Use `--mode maxj_repair` when diagnostics show acceptable QI but poor
-  `maxj_interval_pass_ratio` or weak outward `B_min` growth. This mode raises
-  max-J/B_min weights while keeping QI active enough to prevent backsliding.
-- Treat `--mode engineering` as a late-stage preset. Do not mix too many weakly
-  calibrated engineering or transport penalties into early geometry searches.
-- If QI improves but max-J worsens, do not simply raise all weights. First
-  inspect the failing radial interval and trapped-depth map, then raise
-  `--w_maxj` or `--w_bmin` selectively.
-- If aspect ratio rises during optimisation, keep `--w_ar` active and avoid
-  freeing many high-order boundary modes before the low-order shape is stable.
-- If iota drifts too far, use `--w_iota` with explicit `--iota_ax` and
-  `--iota_edge` in free-iota mode. Use `--prescribe_iota` only for controlled
-  experiments, since it can hide whether the boundary shape naturally supports
-  the desired transform.
-- If `geometry.iota_scan` shows a close approach to a low-order rational over
-  the checked radial range, consider steering the profile away with iota
-  targets or reducing the boundary changes that caused the profile shift.
-- If finite-difference optimisation is noisy, lower the diagnostic resolution
-  for early iterations and increase it only for final polishing.
-- Keep `--w_grad_s` off for early core optimisation unless the base geometry
-  is already acceptable; ITG targets are more model-dependent than QI/max-J.
-
-## Backend And Equilibrium Notes
-
-- The main optimisation path is fixed-boundary VMEC through SIMSOPT: boundary
-  Fourier coefficients are the design variables, and VMEC enforces ideal-MHD
-  force balance for each trial boundary.
-- The DESC backend is currently a diagnostic/fallback shell, not the primary
-  production optimiser. Use it only for controlled experiments until its
-  objective assembly and output handling match the VMEC path.
-- Free-boundary or coil-coupled optimisation should be a separate late-stage
-  workflow after a fixed-boundary target is credible. Do not combine coil/free
-  boundary degrees of freedom with early QI/max-J repair unless the run has a
-  specific engineering purpose.
-
-## Target Implementation Status
-
-The active optimiser now sends resolution-normalised residual vectors to
-SIMSOPT for simple QI, max-J, B_min, aspect, and regularisation targets.
-The logged `f_QI`, `f_maxJ`, and `f_Bmin` values are squared residual norms,
-so they are closer to mean-square errors than grid-size-dependent sums.
-
-R2 squash-stretch-shuffle QI is available as an optional target:
+## 3. Run the baseline diagnosis
 
 ```bash
-python scripts/optimize.py \
+cd /home/guozx/SQuID
+PY=/home/guozx/fusion_env/bin/python
+
+$PY scripts/diag/diagnose.py \
   --nc_file <wout.nc> \
-  --w_qi_r2 0.1 \
-  --qi_r2_nphi 301 --qi_r2_nalpha 24 --qi_r2_nbj 301
+  --output_dir <run>/diagnostics \
+  --plot
 ```
 
-Keep R2 off or lightly weighted during early optimisation. Before making it
-the default:
+Add `--extended` when ITG diagnostics are needed. Add `--ae` only after the
+equilibrium passes cheaper sanity and MHD checks. Use `--skip_ripple` only for
+explicitly labeled fast screening.
 
-1. Compare simple QI and R2 QI on existing cases in `artifacts/legacy_root/`.
-2. Calibrate `--w_qi_r2` at low resolution.
-3. Increase R2 resolution only for final polishing.
-4. Confirm the resulting configurations still pass max-J, B_min, ripple, well,
-   and iota diagnostics.
-
-## R2 Calibration Notes
-
-Initial low-resolution scans used:
+Generate the standard visual report for serious candidates:
 
 ```bash
-python scripts/diagnose.py --nc_file <wout.nc> \
-  --skip_ripple --qi_r2 \
-  --qi_r2_nphi 101 --qi_r2_nalpha 8 --qi_r2_nbj 101 \
-  --qi_r2_mpol 8 --qi_r2_ntor 8 \
-  --output_dir runs/r2_scan_<case>
+$PY scripts/viz/viz_report.py \
+  --nc_file <wout.nc> \
+  --output_dir <run>/viz \
+  --nfp <NFP>
 ```
 
-Observed behaviour:
+The visual report is diagnostic. Force-balanced ballooning and promotion
+decisions come from Skill 04.
 
-- R2 separates the known good, intermediate, and poor QI cases consistently
-  with the simple QI diagnostic.
-- The compressed `(surface, alpha)` R2 residual (`--qi_r2_arr_out` off) and
-  full `(surface, alpha, phi)` residual (`--qi_r2_arr_out` on) produce the same
-  `f_QI_R2` after normalisation; use compressed mode for optimisation.
-- A higher diagnostic resolution
-  `nphi=201, nalpha=16, nBj=201, mpol=12, ntor=12` changed `f_QI_R2` by only a
-  few percent on tested cases, so the lower setting is adequate for ranking.
-- Current representative values at `s=[0.4, 0.5, 0.6]`:
-  good cases are around `f_QI_R2 ~ 5.7e-5`, intermediate cases around
-  `1.4e-4`, and poor cases around `1.8e-3`.
+## 4. Read metrics in this order
 
-Practical recommendation: start with `--w_qi_r2 0.05` to `0.2` alongside the
-simple QI target. Do not make R2 the sole QI objective until a short optimisation
-scan shows it improves R2 without degrading max-J pass ratio, B_min growth,
-well depth, or ripple.
+### A. Numerical existence and geometry
 
-## Git Hygiene
+Reject or repair first when VMEC did not converge, force residuals are not
+small, flux surfaces are broken, the boundary has cusps/self-intersections, or
+results change sign under modest resolution refinement.
 
-- Commit code and small documentation only.
-- Keep `artifacts/legacy_root/`, `artifacts/old_archive/`, and `runs/*`
-  ignored unless a small summary file is intentionally added.
-- Before pushing, avoid storing GitHub tokens in `.git/config`; use a clean
-  remote URL and credential storage instead.
+Fixed-boundary VMEC is a real ideal-MHD force-balance solve for the prescribed
+boundary and profiles. It is not proof that a practical coil set reproduces
+that boundary. A coil-return/free-boundary equilibrium is the later test of
+that realization.
+
+### B. Macroscopic stability
+
+Inspect:
+
+- `Phi_edge^2 * DMerc` minimum, negative count, radial location, and all four
+  components on the declared half-grid interval;
+- magnetic well profile;
+- force-balanced ballooning `lambda_max` and unstable-point count;
+- Newcomb/related ideal-MHD diagnostics when available.
+
+Mercier sign is a hard fact; a positive margin is protocol-specific. Never
+reuse raw or historical B0-scaled thresholds. Follow Skill 09.
+
+### C. Transform and resonance exposure
+
+Inspect the complete `iota(s)` profile, shear, sign changes, and low-order
+rational crossings. A crossing is a risk flag, not proof of an island. The
+deciding follow-up is resonant normal-field response and island-width analysis
+using the actual coil/mgrid field.
+
+### D. Confinement and transport
+
+Inspect effective ripple by radial surface, Boozer `|B|` topology, QI/max-J
+diagnostics, and ITG/AE proxies. Do not compare ripple values produced by
+different implementations or surface grids without labeling the protocol.
+
+For a low-field pure-D device, alpha-particle confinement is not a design
+gate. Thermal-particle confinement, finite-orbit-width risk, bootstrap/current
+behavior, and transport-compatible profiles remain relevant to long pulses.
+
+### E. Engineering exposure
+
+Boundary pdrot and curvature identify difficult regions but do not establish
+coil feasibility. Use current-potential/REGCOIL-like metrics and filamentary
+coil-return results as higher-fidelity evidence. Keep protocols fixed when
+comparing candidates. See Skill 05.
+
+## 5. Diagnose the blocker before choosing an optimizer
+
+| Observed problem | First response |
+| --- | --- |
+| Reconstructed iota/current/beta differs from parent | Fix input conversion or profile preservation; do not optimize yet |
+| Mercier/well fails only at low beta | Scan pressure level and profile shape at fixed boundary |
+| Ballooning limits the high-beta end | Pressure/profile ladder, then guarded boundary continuation |
+| iota crosses dangerous rationals or shear collapses | Scan current/profile response; protect the whole iota profile |
+| Ripple/QI is poor while MHD is sound | Core/QI repair with MHD and topology guards |
+| max-J/Bmin is the main defect | `maxj_repair` response probe |
+| Physics is acceptable but coil proxy is poor | Late engineering or coil-aware branch with physics hard guards |
+| Several unrelated metrics are bad and short probes are flat | Switch seed family; do not keep retuning one basin |
+| Coil-return physics collapses | Optimize robustness around the target or repair the returned boundary; compare both against the same coil perturbation ensemble |
+
+Change one physical idea per short response probe. A large weighted sum hides
+which control produced the apparent improvement.
+
+## 6. Configure a short optimization
+
+Prefer a reviewed JSON file over a long command line:
+
+```bash
+$PY scripts/opt/optimize.py --input_parameter <campaign>/configs/<stage>.json
+```
+
+Choose the closest preset, then override it deliberately:
+
+- `core`: QI/max-J/Bmin and basic shape control;
+- `core_r2_assist`: core optimization with a light R2 QI diagnostic;
+- `maxj_repair`: targeted max-J/Bmin response;
+- `edge_bal_repair` or `edge_bal_direct`: edge/ballooning-oriented work;
+- `engineering`: late engineering proxy work, never an early universal mode.
+
+For every run:
+
+- inspect the printed free-DoF list;
+- use explicit `run_dir`;
+- bound the shape step and keep a parent-profile/iota anchor;
+- checkpoint often enough to retain the best response;
+- cap evaluations for a probe;
+- record the fully resolved parameters.
+
+Do not copy historical weights blindly. Objective magnitudes depend on grids,
+normalization, and residual-vector length. Calibrate weights from the parent
+objective decomposition and one-variable response probes.
+
+## 7. Monitor and stop intelligently
+
+Use `history.csv` to answer whether the targeted blocker moves and which
+guardrail pays for it. Stop when:
+
+- the target changes only at numerical-noise scale;
+- the improvement is purchased by a hard MHD/topology failure;
+- the optimizer reaches an evaluation cap without accepting a step;
+- two parameterizations show the same harmful local response.
+
+An evaluation-cap state is not an accepted optimum. It may be postchecked as a
+response sample, but it must not be promoted as the optimizer result.
+
+## 8. Rebuild and independently evaluate survivors
+
+For each survivor:
+
+1. rebuild at `ns >= 128` (often 192 for marginal Mercier cases);
+2. verify VMEC convergence and force residuals;
+3. rerun the same diagnostic protocol as the parent;
+4. run the external MHD gate and corrected viz report;
+5. check pressure/current/profile perturbations around the operating point;
+6. test at a second spectral/radial resolution;
+7. run the fixed-protocol engineering/coil proxy comparison.
+
+Low-resolution optimization values are for direction finding, not promotion.
+
+## 9. Decide: promote, retain as control, or reject
+
+Promote only when all hard gates pass and the candidate improves the intended
+blocker without an unpriced new risk. Keep useful trade-off points as controls.
+Reject failed probes with a short reason so they are not repeated.
+
+Every decision record must include parent hash, config, code revision,
+resolution, metric protocols, key before/after values, and the next action.
+
+## 10. Required specialist reading
+
+- Any Mercier number: [Skill 09](skill_09_mercier_normalization.md).
+- Any B/beta/pressure/current/iota change:
+  [Skill 08](skill_08_finite_beta_lowB_continuation.md).
+- Any seed construction or NFP reinterpretation:
+  [Skill 02](skill_02_seed_generation.md) and
+  [Skill 07](skill_07_seed_portfolio.md).
+- Any promotion claim: [Skill 04](skill_04_gates_promotion.md).
+- Any coil-feasibility claim: [Skill 05](skill_05_coil_workflow.md).
+- Before trusting surprising output: [Skill 06](skill_06_pitfalls.md).

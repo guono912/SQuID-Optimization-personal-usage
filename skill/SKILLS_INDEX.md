@@ -1,28 +1,38 @@
-# SQuID Agent Skill Collection — Index
+# SQuID Agent Documentation Index
 
-Operational skill documents for CLI/IDE agents working on the SQuID
-stellarator optimization campaigns. Read this index first, then the skill
-that matches your task. The legacy general playbook is `SKILL.md`.
+Read `SKILL.md` first. Open a topic below only when the workflow reaches it.
 
-| Skill | File | Use when |
+| Task | Document | Authority |
 | --- | --- | --- |
-| Environment & layout | `skill_01_environment.md` | First contact with the repo, running anything |
-| Seed generation & conversion | `skill_02_seed_generation.md` | Creating/recomposing NFP=4 seeds from W7-X or other sources |
-| Optimization runs | `skill_03_optimization_runs.md` | Configuring and launching `optimize.py` stages |
-| External gates & promotion | `skill_04_gates_promotion.md` | Deciding PASS/WARN, promoting checkpoints |
-| Coil feasibility workflow | `skill_05_coil_workflow.md` | Coil proxy, REGCOIL-like scans, true contour metrics |
-| Known pitfalls & failure modes | `skill_06_pitfalls.md` | Before trusting any number or repeating an old experiment |
-| Campaign design method | `../runs/w7x_r2p35_goodman_chain/DESIGN_METHOD_R2p35_NFP4.md` | Planning the R=2.35 m, NFP=4 campaign |
+| End-to-end diagnosis and optimization | [SKILL.md](SKILL.md) | Primary workflow |
+| Environment, paths, and repository boundaries | [Skill 01](skill_01_environment.md) | Operational |
+| Importing, reconstructing, or generating seeds | [Skill 02](skill_02_seed_generation.md) | Operational |
+| Configuring and running optimization | [Skill 03](skill_03_optimization_runs.md) | Operational |
+| Independent MHD/physics gates and promotion | [Skill 04](skill_04_gates_promotion.md) | Operational |
+| Coil-side proxies and handoff boundary | [Skill 05](skill_05_coil_workflow.md) | Operational |
+| Known numerical and physical failure modes | [Skill 06](skill_06_pitfalls.md) | Mandatory review |
+| Screening a portfolio and deciding repair vs switch | [Skill 07](skill_07_seed_portfolio.md) | Strategy |
+| Low-B, finite-beta, pressure, current, and iota scans | [Skill 08](skill_08_finite_beta_lowB_continuation.md) | Strategy |
+| Mercier normalization and radial-grid convention | [Skill 09](skill_09_mercier_normalization.md) | Mandatory protocol |
+| Historical evidence behind older rules | [Evidence map](KNOWLEDGE_SOURCES_20260710.md) | Evidence only |
 
-## Non-negotiable working rules (apply to every skill)
+## Conflict resolution
 
-1. Promotion decisions use EXTERNAL gates (`scripts/mhd_gate.py`,
-   fixed-protocol coil contour review), never internal optimizer penalties.
-2. A "PASS" from `mhd_gate.py` is necessary but NOT sufficient for promotion:
-   the gate does not check `DMerc_min >= 0.08`; check it yourself.
-3. Coil metrics are comparable only at the fixed protocol
-   (offset `0.35a`, `lambda = 1e-8`, same M/N resolutions).
-4. Every new branch gets: a `config.json`, checkpoints every 2-3 evals,
-   a gate summary, and a short entry in the campaign `STATUS.md`.
-5. Rerun all gates after ANY change of beta, profiles, resolution, or scale.
-6. Keep physics-first and engineering-only branches labeled and separate.
+Use this precedence order when documents disagree:
+
+1. Current code and tests.
+2. `SKILL.md` and Skills 01-09.
+3. The active campaign's `GUIDELINES.md` and `STATUS.md`.
+4. Historical handoffs, archived guides, and old configs.
+
+A campaign may tighten a gate, but it must not silently change metric
+definitions. Record protocol, code revision, radial grid, and resolution.
+
+## Documentation ownership
+
+- General reusable instructions belong in `skill/`.
+- Exact command options belong in `scripts/README.md` and CLI `--help`.
+- Project targets belong in `/home/guozx/runs/YF_0/...` or `YF_1/...`.
+- Chronology and failed experiments belong in campaign logs.
+- Historical conclusions must not be copied into general skills as universal
+  thresholds without a named calibration protocol.

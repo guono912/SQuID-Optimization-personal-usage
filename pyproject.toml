@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "squid-stellarator"
+version = "1.1.0"
+description = "Stellarator equilibrium optimization and diagnostic tools"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "matplotlib",
+  "netCDF4",
+  "numpy",
+  "scipy",
+]
+
+[project.optional-dependencies]
+desc = ["desc-opt"]
+test = ["pytest>=8"]
+vmec = ["simsopt"]
+
+[project.scripts]
+squid-diagnose = "squid.cli.diagnose:main"
+squid-nc-to-neort = "squid.cli.nc_to_neort:main"
+squid-optimize = "squid.cli.optimize:main"
+squid-refine-qi = "squid.cli.refine_qi:main"
+squid-viz = "squid.cli.viz:main"
+
+[tool.setuptools.packages.find]
+include = ["squid*"]

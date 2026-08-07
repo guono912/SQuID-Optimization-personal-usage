@@ -1,13 +1,22 @@
-Run output directory.
+# Run storage
 
-Use one subdirectory per optimisation or diagnostic comparison, for example:
+Generated results are stored outside the source repository at
+`/home/guozx/runs`.
 
-```bash
-python scripts/diagnose.py \
-  --nc_file artifacts/legacy_root/wout_squid_optimized.nc \
-  --output_dir runs/diagnose_wout_squid_optimized \
-  --plot
+```text
+/home/guozx/runs/
+  YF_0/     compact-device campaigns, normally R about 1.0-1.2 m
+  YF_1/     larger-device campaigns, normally R above 2 m
+  archive/  closed or migrated campaigns
 ```
 
-Files under run subdirectories are ignored by git. Keep only small summary
-notes in tracked documentation.
+Use one campaign directory per scientific objective and one run directory per
+calculation. Keep equilibrium, exact input, diagnostics, logs, manifest, and a
+short decision README together.
+
+The current asset index, important-node list, SHA256 inventory, and migration
+map live directly under `/home/guozx/runs`. Do not duplicate those changing
+tables in the source repository.
+
+See `FILE_MANAGEMENT_GUIDELINES.md` for naming, retention tiers, immutable
+promotion, and cleanup rules.

@@ -1,76 +1,69 @@
-# Skill 06 — Known Pitfalls and Failure Modes (check before acting)
+# Skill 06 - Failure Modes to Check Before Trusting Results
 
-Each entry: symptom → root cause → rule.
+Use this as a preflight checklist when output is surprising.
 
-1. **VMEC wout `xn` vs input `RBC(n,m)` index mismatch.**
-   wout `xn` is PHYSICAL toroidal mode number; input `n` is PER-PERIOD.
-   Caused the invalid FFT table (SEED_INVESTIGATION Section 3) and the
-   mis-indexed `input.desc_beta1p5`. Rule: when moving between wout and
-   input, divide/multiply by NFP explicitly and sanity-check that the
-   dominant helical sits at per-period n=1.
+## Identity and reconstruction
 
-2. **Fourier normalization bugs.** Any spectral table where the (0,0)
-   coefficient does not equal the known major radius is wrong (the 2026-06-11
-   table had RBC(0,0)=2.35/4). Rule: always print the (0,0) check and a
-   physical-space reconstruction RMS before using FFT-extracted coefficients.
+1. **Wrong file or operating point.** Verify hash, NFP, R/a, beta, B0,
+   current, profiles, and resolution before comparing.
+2. **wout/input Fourier mismatch.** wout `xn` is physical toroidal mode;
+   input `RBC(n,m)` uses per-period n. Check `RBC(0,0)` and a physical-space
+   reconstruction.
+3. **Current/profile loss in NCURR=1 reconstruction.** Preserve
+   `AC/AC_AUX/CURTOR` and pressure auxiliaries; compare parent and rebuilt iota,
+   current, and beta before optimization.
 
-3. **Periodicity filter vs reindexing confusion.** A strictly NFP=5 boundary
-   has ZERO n=4 content; only reindexing transfers helical shaping to NFP=4.
-   Rule: never quantitatively compare outputs of the two conversions.
+## Numerical interpretation
 
-4. **`mhd_gate.py` PASS != promotable.** The gate does not enforce
-   `DMerc_min >= 0.08` and stops at rho=0.95 for ballooning. Rule: apply the
-   Skill 04 promotion checklist; rerun marginal candidates with extended
-   edge rho (0.975, 0.99).
+4. **Mercier normalization or grid drift.** Use `Phi_edge^2 * VMEC.DMerc`,
+   remove the leading placeholder, and map to the VMEC half-grid. Always state
+   radial mask and `ns`.
+5. **Near-axis or edge samples dominate a scalar.** Report the full profile,
+   minimum location, negative count, and body/axis regions separately.
+6. **Resolution-dependent sign or raw maximum.** Refine radial, spectral, and
+   surface sampling. A non-convergent geometry tail is a defect, not a metric
+   to average away.
+7. **Different protocols share a metric name.** Ripple, ballooning, pdrot,
+   REGCOIL-like Bn, and curvature values are comparable only with matching
+   implementation and grids.
+8. **GPU smoke test mistaken for workflow support.** Current DESC ripple uses
+   a CPU-only `nufft2` path in this environment.
 
-5. **Marginal ballooning ridge-riding.** lambda_max within (-2e-5, 0] flips
-   with 0.001% beta changes (route1 1.411 vs 1.412). Rule: require
-   lambda_max <= -2e-5 margin before stepping beta up.
+## Optimization behavior
 
-6. **Internal vs external ballooning scale mismatch.** Internal optimizer
-   ballooning residuals (~0.078) and external gate lambda (~1e-6) are not
-   the same quantity (stage07). Rule: do not run gradient pushes on the
-   internal ballooning objective expecting external-gate movement.
+9. **Penalty value treated as physics.** Optimizer residuals are steering
+   quantities; promotion uses independent diagnostics.
+10. **Evaluation-cap state treated as optimum.** Rebuild and postcheck it as a
+    trial only; verify the solver actually accepted the step.
+11. **DoF count mistaken for mode coverage.** Inspect the free-DoF list.
+12. **Iota objective is inactive.** Check tolerance, anchors, current policy,
+    and whether the desired profile is self-consistent.
+13. **Silent beta/current/profile drift pays for improvement.** Compare the
+    complete operating state at every checkpoint.
+14. **One weighted run tries to fix unrelated blockers.** Use short isolated
+    response probes; switch basin after repeated flat/harmful response.
 
-7. **Pressure-only beta pushes on a frozen boundary plateau quickly.**
-   Route1 ceiling 1.411%; tiny low-order probes did not move it. Rule:
-   ramp beta WITH boundary re-optimization at each step (continuation),
-   and change parameterization if a blocker does not move within one short run.
+## Physical reasoning
 
-8. **Optimizer penalty values are not physics.** f_QI etc. depend on grids
-   and normalization. Rule: compare only within the same code/grid/config;
-   acceptance uses external diagnostics.
+15. **Vacuum stability used as the finite-beta verdict.** Run pressure level
+    and profile ladders; finite beta can stabilize or destabilize.
+16. **Field reduction conflates scaling policies.** Fixed beta, fixed pressure,
+    pressure-only, and geometry scaling are different experiments. Use Skill
+    08.
+17. **Rational crossing interpreted as an island.** Compute resonant response
+    in the actual coil field before concluding.
+18. **Global normal-field error treated as sufficient.** Inspect resonant and
+    localized components plus coil-return physics.
+19. **Boundary pdrot treated as coil buildability.** It is a local geometry
+    diagnostic, not the final coil metric.
+20. **Good nominal point mistaken for a steady operating window.** Perturb
+    beta, profiles, current, resolution, and coil errors before promotion.
 
-9. **Coil proxy improves while real coils worsen.** Current-potential Bn can
-   drop while true contours twist (phase01/02 history; route2 offset scan).
-   Rule: true contour curvature + clearances decide; fixed protocol always.
+## Repository hygiene
 
-10. **Iota target no-op.** Penalty inactive inside `iota_tolerance`; strong
-    shape anchor + small dof bounds freeze the boundary (desc stage02:
-    iota_edge moved <0.001 toward a 0.04 target). Rule: size tolerance and
-    anchors against the intended move before launching.
-
-11. **Uncheckpointed best points.** Stage01's internal best (eval27) was lost
-    to cadence-5 checkpoints. Rule: `checkpoint_every: 2-3` in new basins.
-
-12. **Silent beta drift during optimization.** A "better" checkpoint at lower
-    beta is not better. Rule: gate JSONs must show beta within 0.02%
-    absolute of branch target; otherwise rescale pressure and re-gate.
-
-13. **Scaling shortcuts.** Curvature/pdrot scale as 1/s, Gaussian curvature
-    1/s^2 — shrinking R worsens coils; optimize-at-other-scale tricks
-    require full re-gating at final size (AGENT_OPTIMIZATION_GUIDE
-    "Radius Scaling Warning"). Rule: no MHD/coil claims from non-final scale.
-
-14. **Single-source seed tunnel vision.** The campaign treated one W7-X VMEC
-    truncation as "the" seed for weeks; the DESC h5 line (desc_seed) opened
-    a better coil basin. Rule: when a branch plateaus on a blocker for >2
-    stages, spend one short run on a distinct seed line before more repairs.
-
-15. **Beta scans without profile bookkeeping.** Changing PRES_SCALE changes
-    the Shafranov shift, well and DMerc together. Rule: record PRES_SCALE,
-    AM[], and achieved betatotal in every seed folder (the
-    `seeds/beta*_from_*` convention).
-
-16. **Mojibake / encoding.** Write campaign docs in ASCII (avoid box-drawing
-    and arrows) — files in this repo are read from both Linux and Windows.
+21. **Calculation runs from source root.** Require explicit run/output paths
+    and verify no generated artifacts remain at the root.
+22. **Historical handoff treated as current policy.** Use the precedence order
+    in `SKILLS_INDEX.md`; old campaign thresholds remain historical evidence.
+23. **Mojibake in cross-platform docs.** New operational documentation is
+    ASCII unless a scientific symbol is essential and rendering is verified.

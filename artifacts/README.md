@@ -1,8 +1,11 @@
-Artifact layout for local SQuID work.
+# Historical artifacts
 
-- `legacy_root/`: historical VMEC/DESC/diagnostic files moved out of the
-  repository root. These files are intentionally ignored by git.
-- `old_archive/`: old standalone scripts and reference experiments kept for
-  manual lookup only. Active code should live under `squid/` or `scripts/`.
+This directory contains legacy source material retained for provenance and
+manual lookup. It is not an active run root.
 
-New optimisation or diagnosis outputs should go under `runs/<run-name>/`.
+- `legacy_root/`: products moved from the old repository root.
+- `old_archive/`: retired scripts, reports, and reference experiments.
+
+Do not write new calculations here. Active output belongs under
+`/home/guozx/runs/YF_0` or `/home/guozx/runs/YF_1`. Reusable code belongs in
+`squid/`; user entry points belong in `scripts/`.

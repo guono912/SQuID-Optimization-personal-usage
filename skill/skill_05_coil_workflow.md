@@ -45,7 +45,8 @@ Provide:
 
 - target equilibrium hash and exact operating point;
 - allowed normal-field error protocol and hotspot maps;
-- protected iota profile/shear and listed rational surfaces;
+- protected iota profile/shear and two rational lists from Skill 10: nominal
+  NFP-compatible modes and symmetry-breaking error-field exposure modes;
 - acceptable degradation bands for Mercier, ballooning, ripple, and ITG;
 - plasma/coil clearance envelope and any forbidden boundary changes;
 - required coil-return/free-boundary reconstruction cases;
@@ -63,7 +64,8 @@ For each serious target:
 2. compute its coil-return equilibrium;
 3. evaluate the same physics vector as the target;
 4. perturb coil positions, currents, and allowed manufacturing errors;
-5. identify which resonant or geometric error components drive physics loss;
+5. extract complex resonant harmonics, including non-NFP modes introduced by
+   the perturbations, and identify which components drive physics loss;
 6. feed a robustness objective or sensitivity map back to boundary design;
 7. repeat until the target is not dependent on an unrealistically exact coil.
 

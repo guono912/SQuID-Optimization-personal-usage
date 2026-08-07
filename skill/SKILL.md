@@ -96,9 +96,12 @@ reuse raw or historical B0-scaled thresholds. Follow Skill 09.
 ### C. Transform and resonance exposure
 
 Inspect the complete `iota(s)` profile, shear, sign changes, and low-order
-rational crossings. A crossing is a risk flag, not proof of an island. The
-deciding follow-up is resonant normal-field response and island-width analysis
-using the actual coil/mgrid field.
+rational crossings. Keep nominal NFP-compatible resonances separate from the
+broader set that can be driven by symmetry-breaking coil or assembly errors.
+A reduced denominator or `q<=N` crossing count is not a resonance-risk score.
+The deciding follow-up is resonant normal-field response, local shear,
+island-width/overlap analysis, and Poincare topology using the actual
+coil/mgrid field. Follow Skill 10.
 
 ### D. Confinement and transport
 
@@ -202,6 +205,8 @@ resolution, metric protocols, key before/after values, and the next action.
 ## 10. Required specialist reading
 
 - Any Mercier number: [Skill 09](skill_09_mercier_normalization.md).
+- Any rational-crossing, iota-window, or island-risk claim:
+  [Skill 10](skill_10_iota_resonance_policy.md).
 - Any B/beta/pressure/current/iota change:
   [Skill 08](skill_08_finite_beta_lowB_continuation.md).
 - Any seed construction or NFP reinterpretation:

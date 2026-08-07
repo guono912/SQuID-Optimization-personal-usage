@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Documentation
+
+- Defined the canonical two-list rational-resonance policy: nominal
+  NFP-compatible harmonics versus symmetry-breaking error-field exposure.
+- Added the minimum symmetry-compatible harmonic-order formula and prohibited
+  using a broad `q<=N` crossing count as an island or promotion score.
+- Linked rational-surface promotion and coil-return guidance to the new
+  resonance policy.
+
 ## 1.1.0 - 2026-08-07
 
 This release establishes the maintained SQuID baseline used for YF_0 and YF_1

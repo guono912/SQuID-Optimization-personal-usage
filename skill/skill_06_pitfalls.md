@@ -50,8 +50,10 @@ Use this as a preflight checklist when output is surprising.
 16. **Field reduction conflates scaling policies.** Fixed beta, fixed pressure,
     pressure-only, and geometry scaling are different experiments. Use Skill
     08.
-17. **Rational crossing interpreted as an island.** Compute resonant response
-    in the actual coil field before concluding.
+17. **Rational crossing interpreted as an island or ranked by denominator
+    alone.** Separate NFP-compatible natural harmonics from symmetry-breaking
+    exposure modes, then compute resonant response in the actual coil field.
+    Follow Skill 10.
 18. **Global normal-field error treated as sufficient.** Inspect resonant and
     localized components plus coil-return physics.
 19. **Boundary pdrot treated as coil buildability.** It is a local geometry

@@ -76,11 +76,16 @@ For a serious candidate:
 
 ## Rational surfaces
 
-The iota scan reports exposure, not island width. If a low-order surface is
-crossed, promotion requires a response study using the actual or perturbed
-coil field: resonant `B_mn`, Poincare/island analysis, and estimated island
-width where possible. Merely deleting a crossing from a scalar table is not a
-substitute for response robustness.
+The iota scan reports exposure, not island width. Maintain two lists: nominal
+NFP-compatible resonances ranked by their lowest symmetry-compatible
+`(m_sym,n_sym)`, and low-denominator symmetry-breaking modes evaluated under a
+declared coil-error ensemble. The broad `q<=N` count is not a hard gate.
+
+If a relevant surface is crossed, promotion requires a response study using
+the actual or perturbed coil field: complex resonant `B_mn`/`a_mn`, local
+shear, Poincare/island analysis, estimated island width, and overlap where
+possible. Merely deleting a crossing from a scalar table is not a substitute
+for response robustness. Use the definitions and examples in Skill 10.
 
 ## Promotion record
 

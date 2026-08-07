@@ -14,6 +14,7 @@ Read `SKILL.md` first. Open a topic below only when the workflow reaches it.
 | Screening a portfolio and deciding repair vs switch | [Skill 07](skill_07_seed_portfolio.md) | Strategy |
 | Low-B, finite-beta, pressure, current, and iota scans | [Skill 08](skill_08_finite_beta_lowB_continuation.md) | Strategy |
 | Mercier normalization and radial-grid convention | [Skill 09](skill_09_mercier_normalization.md) | Mandatory protocol |
+| Iota rationals, NFP coupling, and resonant-island risk | [Skill 10](skill_10_iota_resonance_policy.md) | Mandatory protocol |
 | Historical evidence behind older rules | [Evidence map](KNOWLEDGE_SOURCES_20260710.md) | Evidence only |
 
 ## Conflict resolution
@@ -21,7 +22,7 @@ Read `SKILL.md` first. Open a topic below only when the workflow reaches it.
 Use this precedence order when documents disagree:
 
 1. Current code and tests.
-2. `SKILL.md` and Skills 01-09.
+2. `SKILL.md` and Skills 01-10.
 3. The active campaign's `GUIDELINES.md` and `STATUS.md`.
 4. Historical handoffs, archived guides, and old configs.
 

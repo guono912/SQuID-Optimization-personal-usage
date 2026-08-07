@@ -79,6 +79,8 @@ artifacts/   historical source material, not active campaign output
 - Treat optimizer penalties as steering signals, not acceptance metrics.
 - Use `Phi_edge^2 * VMEC.DMerc` on the physical VMEC half-grid.
 - Preserve current and pressure profiles when reconstructing `NCURR=1` inputs.
+- Separate nominal NFP-compatible resonances from symmetry-breaking rational
+  exposure; never promote or reject from a `q<=N` crossing count alone.
 - Rebuild selected candidates at high resolution and rerun independent gates.
 - Never overwrite a promoted equilibrium or infer identity from its filename.
 - Keep the source root free of `wout_*.nc`, `input.*`, `threed1.*`,

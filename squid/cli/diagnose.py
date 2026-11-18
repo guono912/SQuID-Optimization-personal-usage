@@ -253,7 +253,7 @@ def _jsonify(obj):
 def _compute_equilibrium_sanity(vmec, squid_info):
     """Basic numerical sanity checks for a single equilibrium."""
     fails, warns = [], []
-    wout = vmec.wou
+    wout = vmec.wout
 
     scalar_checks = {
         "aspect": float(getattr(wout, "aspect", np.nan)),
@@ -364,12 +364,12 @@ def _well_summary(well_data, well_depth):
 
 def _nc_scalar(ds, name, default=float("nan")):
     if name not in ds.variables:
-        return defaul
+        return default
     try:
         arr = np.asarray(ds.variables[name][:])
         return float(arr.reshape(-1)[0])
     except Exception:
-        return defaul
+        return default
 
 
 def _fourier_cos(coeff, m, n, theta, zeta):
@@ -415,7 +415,7 @@ def _first_nonzero_radial_index(arr, start=0, atol=1e-14):
     for idx in range(start, arr.shape[0]):
         if np.nanmax(np.abs(arr[idx])) > atol:
             return idx
-    return star
+    return start
 
 
 def _basic_configuration_summary(
@@ -482,7 +482,7 @@ def _basic_configuration_summary(
 
     out["NFP_field_periods"] = float(nfp)
     out["R0_major_radius_average"] = rmajor
-    out["R0_over_a_aspect_ratio"] = aspec
+    out["R0_over_a_aspect_ratio"] = aspect
     out["minor_radius_effective_a"] = aminor
     out["B0_toroidal_ISS04_B_phi_or_fallback_T"] = b0_iss04
     out["B0_ISS04_extraction_method"] = b0_method
@@ -580,7 +580,7 @@ def _basic_configuration_summary(
             out["effective_ripple_or_proxy_worst_s"] = float(worst["s"])
             out["effective_ripple_or_proxy_worst_value"] = float(worst["value"])
             out["effective_ripple_or_proxy_source"] = worst["source"]
-    return ou
+    return out
 
 
 def _compact_profile(x, y, x_name, y_name):
@@ -699,7 +699,7 @@ def _compact_diagnostic_report(
             "mhd_s_max": args.mhd_s_max,
         },
     }
-    return repor
+    return report
 
 
 def _main_issue_summary(info, ripple_results=None, itg_info=None, ae_info=None):
@@ -741,7 +741,7 @@ def _main_issue_summary(info, ripple_results=None, itg_info=None, ae_info=None):
 def _plot_axis_geometry_summary(ax_info, mercier_data=None, well_data=None,
                                 ripple_results=None):
     """Compact axis/stability summary figure."""
-    import matplotlib.pyplot as pl
+    import matplotlib.pyplot as plt
 
     fig, axes = plt.subplots(2, 2, figsize=(11, 8))
 
@@ -1270,7 +1270,7 @@ def main():
 
     # Plots
     if args.plot:
-        import matplotlib.pyplot as pl
+        import matplotlib.pyplot as plt
         print(f"\n--- Generating plots ---")
 
         # ---------------------------------------------------------

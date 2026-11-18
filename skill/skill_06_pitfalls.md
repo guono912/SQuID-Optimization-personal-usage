@@ -10,14 +10,15 @@ Use this as a preflight checklist when output is surprising.
    input `RBC(n,m)` uses per-period n. Check `RBC(0,0)` and a physical-space
    reconstruction.
 3. **Current/profile loss in NCURR=1 reconstruction.** Preserve
-   `AC/AC_AUX/CURTOR` and pressure auxiliaries; compare parent and rebuilt iota,
-   current, and beta before optimization.
+   the original input when auxiliary knots matter. Wout reconstruction fits
+   pressure and recovers available current metadata. Compare the rebuilt profiles.
 
 ## Numerical interpretation
 
 4. **Mercier normalization or grid drift.** Use `Phi_edge^2 * VMEC.DMerc`,
-   remove the leading placeholder, and map to the VMEC half-grid. Always state
-   radial mask and `ns`.
+   use the producer's interior full-grid positions, and record the mask and
+   `ns`. The current half-grid interpretation shifts a point inward by
+   `1 / (2 * (ns - 1))` in normalized flux. See [Skill 09](skill_09_mercier_normalization.md).
 5. **Near-axis or edge samples dominate a scalar.** Report the full profile,
    minimum location, negative count, and body/axis regions separately.
 6. **Resolution-dependent sign or raw maximum.** Refine radial, spectral, and
@@ -33,8 +34,9 @@ Use this as a preflight checklist when output is surprising.
 
 9. **Penalty value treated as physics.** Optimizer residuals are steering
    quantities; promotion uses independent diagnostics.
-10. **Evaluation-cap state treated as optimum.** Rebuild and postcheck it as a
-    trial only; verify the solver actually accepted the step.
+10. **Evaluation-cap state treated as optimum.** Read the termination record. The VMEC cap
+    recovery file holds the pre-solve boundary. For an accepted DESC run,
+    use `candidate_evaluation` to recover the matching history row.
 11. **DoF count mistaken for mode coverage.** Inspect the free-DoF list.
 12. **Iota objective is inactive.** Check tolerance, anchors, current policy,
     and whether the desired profile is self-consistent.

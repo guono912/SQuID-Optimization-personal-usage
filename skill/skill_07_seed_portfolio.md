@@ -22,7 +22,8 @@ seed families.
 ## Three-stage triage
 
 1. **Manifest prefilter.** Reject impossible size, field, aspect, mirror, or
-   rational-crossing combinations before VMEC. Preserve diversity; do not sort
+   campaign-specific operating-point combinations before VMEC. Flag rational
+   crossings for the symmetry and response review in Skill 10. Preserve diversity; do not sort
    only by QI.
 2. **Vacuum smoke.** Run fixed-boundary VMEC and cheap diagnostics. Record
    convergence, resets, aspect, B0/Bmax, iota axis/edge, rational crossings,
@@ -61,7 +62,8 @@ Use one short guarded repair to measure local response. Switch basin when:
 - a pressure/profile ladder shows the entire fixed boundary has the wrong
   finite-beta response.
 
-Observed examples:
+These examples use the original campaign metrics. Their historical DMerc
+magnitudes have no common normalization or radial protocol established here.
 
 - C003/C040/FA2 guarded Mercier repairs changed DMerc by only about
   `0.002-0.05`; they are response probes, not continuation successes.

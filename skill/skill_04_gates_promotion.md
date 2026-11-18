@@ -8,7 +8,7 @@ physics and engineering evidence.
 ### Level 1: cheap diagnosis
 
 ```bash
-PY=/home/guozx/fusion_env/bin/python
+PY=python
 $PY scripts/diag/diagnose.py \
   --nc_file <wout.nc> --output_dir <run>/diagnostics --plot
 ```
@@ -41,7 +41,10 @@ This performs VMEC sanity checks, flux-normalized Mercier/well assessment,
 DESC force-balance fitting, ballooning, and effective ripple. Review CLI
 `--help` for the exact active radial/alpha protocol and any extended-edge
 option. A gate JSON is only comparable to another gate run with the same
-protocol.
+protocol. Read `verdict` and `issues` in the gate JSON. The command can finish
+successfully with a `WARN`. A `PASS` covers the implemented thresholds on the
+sampled grids. Check the Mercier mask independently using Skill 09 and review
+the additional campaign criteria below.
 
 ## Hard requirements
 
@@ -72,7 +75,7 @@ For a serious candidate:
 3. perturb beta, pressure-profile coefficients, and current around nominal;
 4. verify sign/margin conclusions do not depend on one sample crossing the
    radial gate boundary;
-5. use the physical VMEC half-grid defined in Skill 09.
+5. assign Mercier samples to the producer's full-grid locations as in [Skill 09](skill_09_mercier_normalization.md).
 
 ## Rational surfaces
 

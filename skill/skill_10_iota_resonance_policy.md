@@ -41,8 +41,9 @@ Examples:
 | 2 | `1/3` | `(6,2)` | natural resonance despite reduced numerator 1 |
 | 2 | `2/7` | `(7,2)` | low-order natural resonance |
 
-Thus a `9/10` crossing is not generically harmless or dangerous. It is much
-less exposed in an exact NFP=4 spectrum than in an NFP=3 spectrum. A
+Thus a `9/10` crossing is not generically harmless or dangerous. It is represented
+at higher harmonic order in an exact NFP=4 spectrum than for NFP=3. The
+amplitude of the resonant field determines actual exposure. A
 symmetry-breaking coil or assembly error can still drive the low-order
 `(m,n)=(10,9)` harmonic, so it remains in the error-field exposure list.
 
@@ -112,7 +113,9 @@ island.
   `q<=...` table are broad reduced-fraction exposure scans. They are not NFP
   risk rankings.
 - `viz_report.py` field `nfp_dangerous_rationals_crossed` lists nominal
-  NFP-coupled harmonics within its declared `m/k` limits.
+  NFP-coupled harmonics within the sampled iota range and `m/k` limits.
+  Different harmonic pairs can have the same rational value; the list length
+  does not give a count of distinct surfaces.
 - `physical_diagnostics_report.py` intentionally includes non-NFP
   low-denominator modes as assembly-error exposure markers.
 

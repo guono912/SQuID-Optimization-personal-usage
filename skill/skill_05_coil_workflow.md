@@ -15,14 +15,15 @@ Use them for local repair guidance and regression monitoring.
 ### 2. Inner-loop current-potential proxy
 
 `w_coil_proxy_bn`, `w_coil_proxy_k`, and related low-resolution objectives can
-steer optimization away from poor winding-surface response. Their absolute
+steer the VMEC backend away from poor winding-surface response. The DESC
+optimizer rejects these active weights. Their absolute
 numbers are optimizer-protocol dependent and must not be compared with a
 separate REGCOIL or filamentary calculation.
 
 ### 3. Fixed-protocol current-potential evaluation
 
 ```bash
-PY=/home/guozx/fusion_env/bin/python
+PY=python
 $PY scripts/gate/coil_feasibility_gate.py \
   --wout <wout.nc> --output_dir <run>/coil_proxy \
   --offsets <fixed_values> --lambdas <fixed_values>

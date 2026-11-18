@@ -23,8 +23,8 @@ Skill 01 for paths and the run manifest rules.
 
 ## 2. Create an isolated run
 
-Use `/home/guozx/runs/YF_0` for the compact device and
-`/home/guozx/runs/YF_1` for the larger device.
+Choose a run directory outside the checkout. In the local YF campaigns,
+`YF_0` denotes the compact device and `YF_1` the larger device.
 
 ```text
 <project>/<campaign>/<run_id>/
@@ -42,8 +42,7 @@ root and later search for whichever `wout.nc` appeared.
 ## 3. Run the baseline diagnosis
 
 ```bash
-cd /home/guozx/SQuID
-PY=/home/guozx/fusion_env/bin/python
+PY=python  # From the checkout with the solver environment active
 
 $PY scripts/diag/diagnose.py \
   --nc_file <wout.nc> \
@@ -85,12 +84,14 @@ that realization.
 Inspect:
 
 - `Phi_edge^2 * DMerc` minimum, negative count, radial location, and all four
-  components on the declared half-grid interval;
+  components at the physical full-grid radii in the declared interval.
+  Cross-check the current CLI mask against [Skill 09](skill_09_mercier_normalization.md);
 - magnetic well profile;
 - force-balanced ballooning `lambda_max` and unstable-point count;
 - Newcomb/related ideal-MHD diagnostics when available.
 
-Mercier sign is a hard fact; a positive margin is protocol-specific. Never
+Interpret the sign at a resolved radius in a converged equilibrium. A positive
+margin is protocol-specific. Never
 reuse raw or historical B0-scaled thresholds. Follow Skill 09.
 
 ### C. Transform and resonance exposure
@@ -148,10 +149,10 @@ $PY scripts/opt/optimize.py --input_parameter <campaign>/configs/<stage>.json
 Choose the closest preset, then override it deliberately:
 
 - `core`: QI/max-J/Bmin and basic shape control;
-- `core_r2_assist`: core optimization with a light R2 QI diagnostic;
+- `core_r2_assist`: core optimization with an additional weighted R2 QI residual;
 - `maxj_repair`: targeted max-J/Bmin response;
 - `edge_bal_repair` or `edge_bal_direct`: edge/ballooning-oriented work;
-- `engineering`: late engineering proxy work, never an early universal mode.
+- `engineering`: aspect, mirror, iota and well penalties. Coil proxies require explicit VMEC weights.
 
 For every run:
 
@@ -176,8 +177,10 @@ guardrail pays for it. Stop when:
 - the optimizer reaches an evaluation cap without accepting a step;
 - two parameterizations show the same harmful local response.
 
-An evaluation-cap state is not an accepted optimum. It may be postchecked as a
-response sample, but it must not be promoted as the optimizer result.
+Read `run_status.json` before selecting a file. A budget stop can leave a useful
+checkpoint. VMEC can also write its pre-solve boundary for recovery. For the
+candidate filename, exit code and DESC evaluation index, see
+[Skill 03](skill_03_optimization_runs.md).
 
 ## 8. Rebuild and independently evaluate survivors
 

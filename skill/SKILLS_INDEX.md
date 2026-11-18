@@ -26,7 +26,9 @@ Use this precedence order when documents disagree:
 3. The active campaign's `GUIDELINES.md` and `STATUS.md`.
 4. Historical handoffs, archived guides, and old configs.
 
-A campaign may tighten a gate, but it must not silently change metric
+Code and tests describe the behavior of a revision. For a wout coordinate,
+use the writing solver as the authority; Skill 09 documents the known
+Mercier grid discrepancy. A campaign may tighten a gate, but it must not silently change metric
 definitions. Record protocol, code revision, radial grid, and resolution.
 
 ## Documentation ownership

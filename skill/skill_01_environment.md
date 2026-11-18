@@ -2,21 +2,18 @@
 
 ## Supported environments
 
-Primary paths on WSL and the remote Linux host:
+Use the checkout and solver Python for the host on which the job runs.
+The two maintained installations have different paths.
 
-```text
-source repository: /home/guozx/SQuID
-Python:            /home/guozx/fusion_env/bin/python
-campaign results:  /home/guozx/runs
-YF_0 results:      /home/guozx/runs/YF_0
-YF_1 results:      /home/guozx/runs/YF_1
-```
+| Installation | Checkout | Solver Python |
+| --- | --- | --- |
+| WSL | `~/SQuID` | `~/fusion_env/bin/python` |
+| R7625 | `~/Projects/SQuID-Optimization-personal-usage` | `~/miniconda3/envs/fusion/bin/python` |
 
 Verify the environment before a long run:
 
 ```bash
-cd /home/guozx/SQuID
-PY=/home/guozx/fusion_env/bin/python
+PY=python  # From the checkout with the solver environment active
 $PY -c "import netCDF4, simsopt, desc, jax; print(jax.__version__)"
 $PY -m pytest -q
 ```
@@ -65,12 +62,12 @@ standalone JAX array operation is not sufficient.
 
 ## Remote synchronization
 
-The local WSL repository is the code-maintenance authority. The remote host is
-for compute. Do not synchronize while either worktree has unreviewed changes.
+GitHub `master` records the shared revision. WSL and R7625 have separate
+working trees. Compare both HEADs and any uncommitted changes before syncing.
 
 Before a controlled sync:
 
-1. finish or stop calculations;
+1. check which checkout active jobs use and defer updates to that checkout until they finish;
 2. run tests locally;
 3. inspect `git status` on both machines;
 4. sync source only, never `/home/guozx/runs` by accident;

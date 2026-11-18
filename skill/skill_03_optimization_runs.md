@@ -3,14 +3,13 @@
 ## Launch from a reviewed config
 
 ```bash
-cd /home/guozx/SQuID
-PY=/home/guozx/fusion_env/bin/python
+PY=python  # From the checkout with the solver environment active
 $PY scripts/opt/optimize.py --input_parameter <campaign>/configs/<stage>.json
 ```
 
 The resolved configuration is written to
-`<run_dir>/input_parameter.resolved.json`. This file, not the template, is the
-authority for what ran.
+`<run_dir>/input_parameter.resolved.json`. It records the settings at launch. With `backend=auto`, confirm the selected backend
+in the log. Values derived from the equilibrium can be set after this file is written.
 
 Current presets are `core`, `core_r2_assist`, `maxj_repair`, `engineering`,
 `edge_bal_repair`, and `edge_bal_direct`. Presets are starting points, not
@@ -32,8 +31,9 @@ Declare:
 ## Choose degrees of freedom deliberately
 
 `max_dofs` is only a count. Inspect the printed free-DoF list and confirm the
-intended `(m,n)` families are present. Use `free_m_max/free_n_max`, shape
-anchors, and `dof_bound_frac` to define the local search.
+intended modes are present. VMEC uses `free_m_max/free_n_max` to restrict
+the mode search and can apply hard coefficient bounds. DESC uses its own mode
+order and treats `dof_bound_frac` as a soft penalty.
 
 Use low-order modes first for a local repair. Open higher modes only when a
 measured blocker requires them and geometry tails are guarded.
@@ -61,13 +61,30 @@ identity, and numerical convergence should be hard guards where supported.
 
 - whether the named blocker moves;
 - beta, current, iota profile/shear, and rational crossings;
-- flux-normalized Mercier and components on the declared half-grid mask;
+- flux-normalized Mercier and components, with an independent radial-mask
+  check as described in [Skill 09](skill_09_mercier_normalization.md);
 - QI/max-J/Bmin/ripple or engineering proxy relevant to the hypothesis;
 - tail statistics, not only means or maxima;
 - VMEC failures and elapsed time.
 
-Checkpoint every few evaluations in a new basin. A final solver state after an
-evaluation-cap exception is not necessarily an accepted optimizer step.
+The history columns differ by backend. Use independent diagnostics for missing
+quantities such as ripple. Preserve checkpoints for promising trials.
+
+## Read the termination record
+
+| State in `run_status.json` | Action |
+| --- | --- |
+| `converged` and `accepted: true` | Rebuild VMEC's `input.squid_optimized` or read DESC's `wout_desc_optimized.nc`. For DESC, `candidate_evaluation` identifies the exported point. |
+| `initial_only` | Inspect the baseline. A successful `--maxiter 0` run exits 0 with `accepted: false`. |
+| `evaluation_cap_recovered_start` / `evaluation_cap` | The total evaluation budget stopped VMEC / DESC. VMEC saves its pre-solve boundary as `input.squid_unaccepted_cap`. |
+| `solver_evaluation_limit` / `iteration_limit` | The solver exhausted its own allowance. Review the history before allocating more work. |
+| `candidate_rejected` / `solver_failed` | Inspect the solver message, available rejection reasons and diagnostic output. |
+
+Budget stops and rejected candidates exit 2. An interrupted process can leave
+no status file. VMEC's solver allowance is `maxiter * (n_free + 1)`; its total
+evaluation count also includes finite-difference probes. DESC counts the
+initial point toward its total allowance and limits simplex iterations with
+`maxiter`. The final history row can be a discarded trial.
 
 ## Stop rules
 
@@ -91,7 +108,7 @@ applicable. Record before/after values with identical protocols.
 
 ## Backend selection
 
-VMEC uses SIMSOPT least squares. DESC solves force balance with DESC and
+VMEC uses SIMSOPT residuals with SciPy nonlinear least squares. DESC solves force balance with DESC and
 reads its exported wout with SIMSOPT for the core SQuID terms. DESC needs a
 wout as input. Auto selection prefers VMEC when its extension is available.
 The CLI rejects active objectives and hard gates exclusive to the other

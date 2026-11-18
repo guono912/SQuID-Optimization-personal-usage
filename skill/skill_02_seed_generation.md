@@ -24,11 +24,14 @@ settings.
 
 When only a wout exists, SQuID can reconstruct an input. In `NCURR=1` mode it
 must preserve `AC/AC_AUX/CURTOR`; it must not silently replace the source
-current with zero. The reconstruction gate compares endpoint iota, current,
-and beta against the source before optimization starts.
+current with zero. In the VMEC free-iota reconstruction path, the preflight compares iota
+endpoints and profile, pressure, total current, current density when available,
+and beta. With a near-zero reference profile, a large relative error can reflect
+a tiny absolute difference. Inspect both and use the matching original input
+when available. DESC imports a wout directly.
 
-Use `--zero_current` only for an explicitly labeled vacuum/current-removal
-experiment.
+Use `--zero_current` for a deliberate current-removal experiment. A vacuum
+reference also requires checking the pressure profile.
 
 ## Baseline reconstruction test
 
@@ -55,14 +58,15 @@ Changing NFP is not geometric scaling. Distinguish:
 - directly optimizing a native seed at the desired NFP.
 
 These operations answer different physical questions. Record the method and
-verify `RBC(0,0)` equals the intended major radius. Overlay physical-space
+verify the boundary scale via `RBC(0,0)`. Compare the equilibrated
+`Rmajor_p` separately if the target is specified in that convention. Overlay physical-space
 cross-sections and report boundary reconstruction RMS before using a converted
 seed.
 
 For fixed-NFP low-mode filtering/rescaling:
 
 ```bash
-PY=/home/guozx/fusion_env/bin/python
+PY=python
 $PY scripts/seed/recompose_vmec_input.py \
   --input <input.src> \
   --output <run>/equilibrium/input.recomposed \
@@ -70,7 +74,15 @@ $PY scripts/seed/recompose_vmec_input.py \
   --preserve-profiles
 ```
 
-Review `--help`; do not infer flags from historical campaign scripts.
+This seed writer reads simple AM and AC assignments. Indexed or multiline
+coefficients, auxiliary spline knots and prescribed-iota coefficients require
+separate verification. Use the original input when profile fidelity matters.
+
+The separate `scripts/transform/rescale_and_gate.py` workflow constructs a
+four-period, free-iota, zero-current equilibrium at the requested major
+radius. It fits pressure and scales edge flux with the square of the length
+ratio. Record the changes to field period and current when comparing it with
+its parent.
 
 ## Analytic and near-axis seeds
 

@@ -61,8 +61,8 @@ Therefore:
 
 1. use low resolution only for direction finding;
 2. rebuild the selected input at `ns>=128` and a tight VMEC tolerance;
-3. recompute `dmerc_flux_normalized` on the declared radial interval and
-   record `Phi_edge`;
+3. independently recompute `dmerc_flux_normalized` on the declared physical
+   full-grid interval and record `Phi_edge` and the retained indices (Skill 09);
 4. run the external MHD gate before promotion.
 
 Never average or merge ns64 and ns128 values in one ranking column.

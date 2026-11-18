@@ -1215,7 +1215,7 @@ def main():
         "maxj_global_violation_fraction": float(info["maxj_global_violation_fraction"]),
         "bmin_penalty": float(info["f_Bmin"]),
         "mirror_ratio": float(info["mirror_ratio"]),
-        "mercier_min": mercier_facts.get("min"),
+        "mercier_min": mercier_facts.get("flux_normalized_min"),
         "mercier_negative_count": mercier_facts.get("negative_count"),
         "well_depth_edge": well_facts.get("edge"),
         "well_min": well_facts.get("min"),

@@ -17,7 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 desc = ["desc-opt"]
-test = ["pytest>=8"]
+test = ["pytest>=8", "tomli; python_version < '3.11'"]
 vmec = ["simsopt"]
 
 [project.scripts]

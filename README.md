@@ -4,8 +4,7 @@ SQuID is a stellarator equilibrium optimization and diagnostic toolkit built
 around VMEC/SIMSOPT, DESC, Boozer-space diagnostics, and engineering proxies.
 
 This repository contains code and operating documentation. Generated
-equilibria and campaign results live under `/home/guozx/runs`, not in the
-source tree.
+equilibria and campaign results belong in a separate run directory.
 
 ## Start here
 
@@ -23,23 +22,14 @@ config unless the current task explicitly targets that campaign.
 ## Quick start
 
 ```bash
-cd /home/guozx/SQuID
-PY=/home/guozx/fusion_env/bin/python
+# From the checkout, with your solver environment activated:
+PY=python
+WOUT=/path/to/wout.nc
+RUN="$HOME/runs/my-campaign"
 
-# Cheap baseline diagnosis
-$PY scripts/diag/diagnose.py \
-  --nc_file <wout.nc> \
-  --output_dir /home/guozx/runs/<project>/<campaign>/<run>/diagnostics \
-  --plot
-
-# Full visual report
-$PY scripts/viz/viz_report.py \
-  --nc_file <wout.nc> \
-  --output_dir /home/guozx/runs/<project>/<campaign>/<run>/viz
-
-# Optimization from a reviewed JSON config
-$PY scripts/opt/optimize.py \
-  --input_parameter /home/guozx/runs/<project>/<campaign>/configs/<stage>.json
+$PY scripts/diag/diagnose.py --nc_file "$WOUT" --output_dir "$RUN/diagnostics" --plot
+$PY scripts/viz/viz_report.py --nc_file "$WOUT" --output_dir "$RUN/viz"
+$PY scripts/opt/optimize.py --input_parameter "$RUN/configs/stage.json"
 ```
 
 Before promoting a result, follow the independent gate and resolution checks
@@ -47,11 +37,11 @@ in [`skill/skill_04_gates_promotion.md`](skill/skill_04_gates_promotion.md).
 
 ## Environment
 
-The validated local environment is `/home/guozx/fusion_env`. For development,
-install this source tree without replacing its validated solver stack:
+For development, activate the environment containing your validated solver stack
+and install the checkout:
 
 ```bash
-/home/guozx/fusion_env/bin/python -m pip install -e . \
+python -m pip install -e . \
   --no-deps --no-build-isolation
 ```
 
@@ -89,8 +79,7 @@ artifacts/   historical source material, not active campaign output
 ## Tests
 
 ```bash
-cd /home/guozx/SQuID
-PY=/home/guozx/fusion_env/bin/python
+PY=python
 
 # Fast suite
 $PY -m pytest -q

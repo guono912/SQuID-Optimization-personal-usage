@@ -87,3 +87,12 @@ seed instead of retuning weights indefinitely.
 Never rank directly from low-resolution history. Rebuild selected checkpoints
 at high radial and spectral resolution, then run Skills 04, 05, 08, and 09 as
 applicable. Record before/after values with identical protocols.
+
+
+## Backend selection
+
+VMEC uses SIMSOPT least squares. DESC solves force balance with DESC and
+reads its exported wout with SIMSOPT for the core SQuID terms. DESC needs a
+wout as input. Auto selection prefers VMEC when its extension is available.
+The CLI rejects active objectives and hard gates exclusive to the other
+backend. For example, high-B topology uses DESC and coil-proxy weights use VMEC.

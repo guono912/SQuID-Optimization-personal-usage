@@ -18,7 +18,7 @@ Complete PRX Energy target function:
 
 Backends:
   - VMEC (via simsopt): fastest, requires VMEC2000 Fortran extension
-  - DESC (fallback):     pure Python, automatically used when VMEC absent
+  - DESC: solves force balance in DESC and reads wout via SIMSOPT
 
 Usage:
     python scripts/opt/optimize.py \\
@@ -31,6 +31,8 @@ import os
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import argparse
+import math
+from difflib import get_close_matches
 import json
 from datetime import datetime
 from pathlib import Path
@@ -267,7 +269,6 @@ def _build_parser(defaults=None):
     parser = argparse.ArgumentParser(
         description="SQuID stellarator optimiser (complete PRX Energy target)"
     )
-    parser.set_defaults(**defaults)
     parser.add_argument("--input_parameter", type=str, default=defaults.get("input_parameter"),
                         help="JSON parameter file. CLI arguments override file values.")
     parser.add_argument("--mode", choices=sorted(MODE_PRESETS), default=defaults.get("mode", "core"),
@@ -509,6 +510,15 @@ def _build_parser(defaults=None):
     parser.add_argument("--pdrot_weight_top_rho", type=float,
                         default=defaults.get("pdrot_weight_top_rho", 0.0),
                         help="Internal weight for top-fraction absolute pdrot hinge")
+    for key, fallback in {
+        "pdrot_mean_q_target": None, "pdrot_mean_rho_target": None,
+        "pdrot_weight_mean_q": 0.0, "pdrot_weight_mean_rho": 0.0,
+        "pdrot_weight_q": 1.0, "pdrot_weight_rho": 1.0,
+        "pdrot_smooth_eps_q": 0.0, "pdrot_smooth_eps_rho": 0.0,
+    }.items():
+        parser.add_argument(f"--{key}", type=float, default=defaults.get(key, fallback))
+    parser.add_argument("--ballooning_n_alpha", type=int,
+                        default=defaults.get("ballooning_n_alpha", 8))
     parser.add_argument("--pdrot_delta_kappa_a", type=float,
                         default=defaults.get("pdrot_delta_kappa_a", 0.001),
                         help="Regularization scale for umbilic-point handling")
@@ -683,15 +693,14 @@ def _build_parser(defaults=None):
 
 
 def _flatten_config(config):
+    if not isinstance(config, dict):
+        raise ValueError("expected a JSON object at the top level")
     flat = {}
     for key, value in config.items():
         if key in CONFIG_GROUPS and isinstance(value, dict):
             for subkey, subvalue in value.items():
                 candidate = f"{key}.{subkey}"
                 flat[CONFIG_ALIASES.get(candidate, subkey)] = subvalue
-        elif key == "r2" and isinstance(value, dict):
-            for subkey, subvalue in value.items():
-                flat[CONFIG_ALIASES.get(f"r2.{subkey}", subkey)] = subvalue
         else:
             flat[key] = value
     return flat
@@ -729,10 +738,50 @@ def _reject_legacy_mercier_config(config, parser):
     )
 
 
+def _validate_config(config, parser, args):
+    _reject_legacy_mercier_config(config, parser)
+    # Campaign annotations and provenance in saved resolved configurations.
+    metadata = {"name", "note", "notes", "outer_gate_note", "_source_config",
+                "_input_parameter_file"}
+    actions = {a.dest: a for a in parser._actions if a.dest != "help"}
+    errors = []
+    for key in sorted(config.keys() - actions.keys() - metadata):
+        match = get_close_matches(key, actions, n=1)
+        hint = f" (did you mean {match[0]}?)" if match else ""
+        errors.append(key + hint)
+    if errors:
+        parser.error("unknown configuration keys: " + ", ".join(errors))
+    for key in config.keys() & actions.keys():
+        choices = actions[key].choices
+        if choices is not None and getattr(args, key) not in choices:
+            parser.error(f"invalid {key}: {getattr(args, key)!r}; choose from {list(choices)}")
+
+
 def _jsonify(obj):
     if isinstance(obj, Path):
         return str(obj)
     return obj
+
+
+# These controls contribute to only one of the two objective assemblies.
+VMEC_ONLY_WEIGHTS = {
+    "w_boundary_curvature", "w_coil_proxy_bn", "w_coil_proxy_k",
+    "w_coil_proxy_phi", "w_iota_monotonic", "w_iota_profile", "w_iota_shear",
+    "w_local_maxj", "w_maxj_guard", "w_mercier", "w_oops", "w_oops_guard",
+    "w_pdrot", "w_rational", "w_shape_anchor",
+}
+
+
+def _check_backend_controls(backend, args, parser):
+    unsupported = VMEC_ONLY_WEIGHTS if backend == "desc" else {"w_highB_topology"}
+    active = [name for name in unsupported if getattr(args, name) != 0]
+    if backend == "desc":
+        active.extend(name for name in ("hard_rational_crossing", "hard_gate_iota_topology")
+                      if getattr(args, name))
+        if math.isfinite(args.hard_coil_proxy_bn_max):
+            active.append("hard_coil_proxy_bn_max")
+    if active:
+        parser.error(f"{backend} backend does not implement: {', '.join(sorted(active))}")
 
 
 def _validate_optional_backends(args, parser):
@@ -782,26 +831,47 @@ def main(argv=None):
     pre.add_argument("--mode", choices=sorted(MODE_PRESETS), default="core")
     pre_args, _ = pre.parse_known_args(argv)
 
-    config = _load_config(pre_args.input_parameter)
+    try:
+        config = _load_config(pre_args.input_parameter)
+    except (ValueError, OSError) as exc:
+        pre.error(f"invalid configuration: {exc}")
     cli_mode_set = any(
         arg == "--mode" or arg.startswith("--mode=")
         for arg in argv
     )
     mode = pre_args.mode if cli_mode_set else config.get("mode", pre_args.mode)
-    defaults = MODE_PRESETS.get(mode, MODE_PRESETS["core"]).copy()
+    if not isinstance(mode, str) or mode not in MODE_PRESETS:
+        pre.error(f"unknown optimization mode: {mode!r}")
+    defaults = MODE_PRESETS[mode].copy()
     defaults.update(config)
     defaults["mode"] = mode
     defaults["input_parameter"] = pre_args.input_parameter
 
     parser = _build_parser(defaults)
     args = parser.parse_args(argv)
+    _validate_config(config, parser, args)
     jax_device = initialize_requested_jax_backend()
     if jax_device is not None:
         print(f"  JAX CUDA device initialized early: {jax_device}")
-    _reject_legacy_mercier_config(config, parser)
-    _validate_optional_backends(args, parser)
     if not args.nc_file and not getattr(args, "vmec_input_file", None):
         parser.error("--nc_file or --vmec_input_file is required unless provided by --input_parameter")
+    backend = args.backend
+    if backend == "auto":
+        backend = "vmec" if HAS_VMEC else "desc"
+    use_desc = backend == "desc"
+    if use_desc:
+        if not HAS_DESC:
+            parser.error("DESC backend requires desc-opt")
+        if args.vmec_input_file or not args.nc_file:
+            parser.error("DESC backend requires --nc_file (wout); --vmec_input_file is VMEC-only")
+    elif not HAS_VMEC:
+        parser.error("VMEC backend requires the VMEC extension")
+    try:
+        from simsopt.mhd import Vmec  # noqa: F401
+    except ImportError as exc:
+        parser.error(f"{backend} backend requires the SIMSOPT VMEC interface: {exc}")
+    _check_backend_controls(backend, args, parser)
+    _validate_optional_backends(args, parser)
     resolved_path = _write_resolved_parameters(args, config)
 
     print(f"\n{'=' * 60}")
@@ -811,22 +881,6 @@ def main(argv=None):
     print(f"  Mode  : {args.mode}")
     print(f"  Run   : {args.run_dir}")
     print(f"  Params: {resolved_path}")
-
-    use_desc = False
-    if args.backend == "vmec":
-        if not HAS_VMEC:
-            print("  ERROR: --backend=vmec but VMEC extension not installed.")
-            sys.exit(1)
-    elif args.backend == "desc":
-        use_desc = True
-    else:
-        if HAS_VMEC:
-            use_desc = False
-        elif HAS_DESC:
-            use_desc = True
-        else:
-            print("  ERROR: neither VMEC nor DESC is installed.")
-            sys.exit(1)
 
     if use_desc:
         from ..backends.desc_backend import run_desc

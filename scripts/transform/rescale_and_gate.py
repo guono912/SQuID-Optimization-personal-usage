@@ -7,7 +7,10 @@ Usage:
         --wout path/to/wout.nc --target_rmajor 2.5 \
         --output_dir gate_results/
 """
-import os, sys, json, argparse, subprocess, shutil, glob
+import argparse
+import os
+import shutil
+import sys
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -31,41 +34,23 @@ def _run_in_directory(path):
 
 def rescale(wout_src, target_rmajor, output_dir, ns=31):
     """Rescale wout to new R0 and run VMEC."""
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    stem = Path(wout_src).stem
-    name = f"input.{stem}_R{str(target_rmajor).replace('.','p')}"
-
-    cmd = [
-        sys.executable,
-        "/home/guozx/w7x_squid_nfp4/scripts/wout_to_nfp4_input.py",
-        "--wout", wout_src,
-        "--output", str(output_dir / name),
-        "--nfp-out", "4",
-        "--target-rmajor", str(target_rmajor),
-        "--keep-pressure",
-        "--free-iota",
-        "--ns", str(ns),
-    ]
-    subprocess.run(cmd, check=True, cwd=str(output_dir))
-
     from simsopt.mhd import Vmec
-    vmec = Vmec(str(output_dir / name))
-    with _run_in_directory(output_dir):
-        vmec.run()
+    from squid.utils.vmec_input import wout_to_input
 
-    # simsopt VMEC names wout as "wout_{input_basename}_{run}.nc"
-    base = Path(name).stem
-    wout_files = glob.glob(os.path.join(str(output_dir), f"wout_{base}_*.nc"))
-    if not wout_files:
-        # try broader pattern
-        wout_files = glob.glob(os.path.join(str(output_dir), "wout_*.nc"))
-    if wout_files:
-        latest = max(wout_files, key=os.path.getmtime)
-        wout_out = output_dir / f"{stem}_R{str(target_rmajor).replace('.','p')}.nc"
-        shutil.copy(latest, wout_out)
-        return str(wout_out)
-    raise FileNotFoundError("VMEC wout not found after rescale")
+    source = Path(wout_src).resolve()
+    output_dir = Path(output_dir).resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stem = f"{Path(wout_src).stem}_R{str(target_rmajor).replace('.', 'p')}"
+    input_path = output_dir / f"input.{stem}"
+    # The historical NFP4 transform uses free iota with zero toroidal current.
+    wout_to_input(source, input_path, ns=ns, nfp_out=4,
+                  target_rmajor=target_rmajor, zero_current=True)
+    with _run_in_directory(output_dir):
+        vmec = Vmec(str(input_path))
+        vmec.run()
+        output = output_dir / f"{stem}.nc"
+        shutil.copyfile(vmec.output_file, output)
+    return str(output)
 
 
 def gate(wout_path, output_dir):

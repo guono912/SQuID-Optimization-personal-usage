@@ -3,12 +3,13 @@
 Use JSON configs for reproducible optimization:
 
 ```bash
-PY=/home/guozx/fusion_env/bin/python
+PY=python
 $PY scripts/opt/optimize.py --input_parameter <reviewed_config.json>
 ```
 
-`core.json`, `core_r2_assist.json`, `maxj_repair.json`,
-`edge_bal_repair.json`, and `edge_bal_direct.json` illustrate current presets.
+`core.json`, `core_r2_assist.json`, and `maxj_repair.json` illustrate current presets.
+The archived `edge_bal_*.json` examples use a legacy Mercier margin.
+Recalibrate that margin before using them with flux-normalized Mercier values.
 Copy a template into the active campaign and review every path, target, weight,
 resolution, and guard before running it.
 
@@ -21,6 +22,11 @@ Resolution order is:
 1. mode preset;
 2. JSON values;
 3. command-line overrides.
+
+Unknown JSON option names stop the optimizer before it creates a run directory.
+The top-level fields `name`, `note`, `notes`, and `outer_gate_note` remain
+available for campaign metadata. Both flat options and grouped options such
+as `weights.w_qi` and `r2.nphi` are supported.
 
 The optimizer writes the effective values to
 `<run_dir>/input_parameter.resolved.json`. Preserve that file with the run.

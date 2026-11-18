@@ -11,7 +11,7 @@ Flow per eval:
 Uses scipy Nelder-Mead (derivative-free, robust for noisy DESC solves).
 """
 
-import os, sys, time, json, csv, tempfile, shutil
+import os, time, csv, tempfile
 import numpy as np
 
 from simsopt.mhd import Vmec
@@ -62,6 +62,12 @@ def _compute_iota_penalty(iota_axis, iota_edge, iota_ax_target,
 
 
 def run_desc(args):
+    os.makedirs(args.run_dir, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=args.run_dir, prefix="desc-") as scratch:
+        return _run_desc(args, os.path.join(scratch, "wout_desc_squid.nc"))
+
+
+def _run_desc(args, wout_tmp):
     from desc.vmec import VMECIO
 
     print(f"\n  Backend: DESC (force-balance + VMEC bridge for SQuID)")
@@ -146,9 +152,6 @@ def run_desc(args):
         with open(history_path, "a", newline="") as fh:
             writer = csv.DictWriter(fh, fieldnames=history_fields)
             writer.writerow({k: row.get(k, "") for k in history_fields})
-
-    # ── Temp wout ──
-    wout_tmp = os.path.join(tempfile.gettempdir(), "wout_desc_squid.nc")
 
     # ── State ──
     n_eval = [0]
@@ -598,24 +601,15 @@ def run_desc(args):
 
     # ── Save final equilibrium ──
     out_wout = os.path.join(run_dir, "wout_desc_optimized.nc")
-    try:
-        new_R = np.asarray(R0).copy()
-        new_Z = np.asarray(Z0).copy()
-        new_R[free_idx_R] = x_save[:nR]
-        new_Z[free_idx_Z] = x_save[nR:]
-        surf.R_lmn = new_R
-        surf.Z_lmn = new_Z
-        from desc.objectives import get_fixed_boundary_constraints
-        constraints = get_fixed_boundary_constraints(eq=eq, profiles=True, normalize=True)
-        eq.solve(objective="force", constraints=constraints,
-                 optimizer="lsq-exact", maxiter=50, verbose=0)
-        VMECIO.save(eq, out_wout, surfs=args.ns_vmec, verbose=0)
-        print(f"  Saved: {out_wout}")
-    except Exception as e:
-        print(f"  Could not save DESC wout: {e}")
-
-    # Cleanup
-    if os.path.exists(wout_tmp):
-        os.remove(wout_tmp)
-
-    print(f"\n{'=' * 60}\nDone.\n{'=' * 60}\n")
+    new_R = np.asarray(R0).copy()
+    new_Z = np.asarray(Z0).copy()
+    new_R[free_idx_R] = x_save[:nR]
+    new_Z[free_idx_Z] = x_save[nR:]
+    surf.R_lmn = new_R
+    surf.Z_lmn = new_Z
+    from desc.objectives import get_fixed_boundary_constraints
+    constraints = get_fixed_boundary_constraints(eq=eq, profiles=True, normalize=True)
+    eq.solve(objective="force", constraints=constraints,
+             optimizer="lsq-exact", maxiter=50, verbose=0)
+    VMECIO.save(eq, out_wout, surfs=args.ns_vmec, verbose=0)
+    print(f"  Saved: {out_wout}")

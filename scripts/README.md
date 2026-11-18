@@ -56,6 +56,11 @@ python scripts/transform/rescale_and_gate.py --help
 Seed/NFP/scale transformations require provenance and reconstruction checks;
 see Skills 02 and 08.
 
+The NFP4 rescale command reconstructs a four-period boundary at the requested
+major radius. It scales edge flux by the square of the length ratio, fits the
+source pressure, and computes free iota with zero current. Its `wout` supplies
+the input to the MHD gate.
+
 ## Visualization
 
 ```bash
@@ -77,7 +82,7 @@ python scripts/util/nc_to_neort.py --help
 
 ## Output rules
 
-- Always pass an explicit run/output path under `/home/guozx/runs`.
+- Always pass an explicit run/output path outside the source tree.
 - Optimization refuses a non-empty `run_dir` by default. Use a new directory;
   `--overwrite_run_dir` is an explicit recovery-only override.
 - An evaluation-cap stop exits nonzero and writes

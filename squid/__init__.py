@@ -6,4 +6,4 @@ Based on:
   as Fusion Reactor Candidates", PRX Energy 3, 023010 (2024).
 """
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"

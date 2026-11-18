@@ -93,3 +93,8 @@ Run the fast suite from the checkout. Set `SQUID_TEST_WOUT` to an equilibrium co
 python -m pytest -q
 SQUID_TEST_WOUT="$WOUT" JAX_PLATFORMS=cpu python -m pytest -q
 ```
+
+## License
+
+SQuID is released under the [MIT License](LICENSE). Third-party dependencies
+are distributed under their respective licenses.

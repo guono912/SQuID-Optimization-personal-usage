@@ -1,6 +1,12 @@
 # Changelog
 
-## Unreleased
+## 1.1.1 - 2026-11-18
+
+- Released SQuID under the MIT License.
+- Added optimizer configuration validation and portable VMEC rescaling.
+- Corrected candidate export and acceptance when a solver stops or reaches
+  its evaluation budget.
+- Updated Mercier radial sampling and gate reporting for DESC exports.
 
 ### Documentation
 

@@ -112,10 +112,10 @@ def gate(wout_path, output_dir="runs/mhd_gate_latest", L=6, M=6, N=6,
         "betatotal": float(ds.variables["betatotal"][:]),
         "Rmajor_p": float(ds.variables["Rmajor_p"][:]),
         "Aminor_p": float(ds.variables["Aminor_p"][:]),
-        "fsqr": float(ds.variables["fsqr"][:]),
-        "fsqz": float(ds.variables["fsqz"][:]),
         "iotaf": [float(ds.variables["iotaf"][0]), float(ds.variables["iotaf"][-1])],
     }
+    for name in ("fsqr", "fsqz"):
+        vmec_info[name] = float(ds.variables[name][:]) if name in ds.variables else None
     nfp = vmec_info["nfp"]
 
     # Mercier
@@ -197,7 +197,9 @@ def gate(wout_path, output_dir="runs/mhd_gate_latest", L=6, M=6, N=6,
     if vmec_info["ier_flag"] != 0:
         issues.append(f"VMEC ier_flag={vmec_info['ier_flag']}")
     for name in ("fsqr", "fsqz"):
-        if not np.isfinite(vmec_info[name]):
+        if vmec_info[name] is None:
+            issues.append(f"VMEC {name} is unavailable in this wout")
+        elif not np.isfinite(vmec_info[name]):
             issues.append(f"VMEC {name} is non-finite")
     if not np.isfinite(fb_rms_final):
         issues.append("DESC force-balance residual is non-finite")

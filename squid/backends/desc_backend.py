@@ -11,7 +11,12 @@ Flow per eval:
 Uses scipy Nelder-Mead (derivative-free, robust for noisy DESC solves).
 """
 
-import os, time, csv, tempfile
+import csv
+import json
+import os
+import shutil
+import tempfile
+import time
 import numpy as np
 
 from simsopt.mhd import Vmec
@@ -138,7 +143,7 @@ def _run_desc(args, wout_tmp):
     # ── History CSV ──
     history_path = os.path.join(run_dir, "history.csv")
     history_fields = [
-        "eval", "f_QI", "f_maxJ", "f_Bmin", "mirror_ratio",
+        "eval", "objective", "f_QI", "f_maxJ", "f_Bmin", "mirror_ratio",
         "iota_axis", "iota_edge", "beta", "f_grad_s", "f_highB",
         "well_depth", "dmerc_convention", "dmerc_edge_toroidal_flux_wb",
         "dmerc_vmec_raw_min", "dmerc_flux_normalized_min",
@@ -168,7 +173,7 @@ def _run_desc(args, wout_tmp):
 
     def _append_history_row(**kw):
         _append_history(dict(
-            eval=n_eval[0],
+            eval=n_eval[0], objective=kw.get("objective"),
             f_QI=kw.get("f_QI"), f_maxJ=kw.get("f_maxJ"),
             f_Bmin=kw.get("f_Bmin"), mirror_ratio=kw.get("delta"),
             iota_axis=kw.get("iota_ax"), iota_edge=kw.get("iota_ed"),
@@ -190,7 +195,19 @@ def _run_desc(args, wout_tmp):
     # Objective function
     # ═══════════════════════════════════════════════════════════════
 
-    def objective(x):
+    parent_eq = eq
+    best_value = np.inf
+    best_x = None
+    best_eval = None
+    best_file = os.path.join(os.path.dirname(wout_tmp), "best.nc")
+    initial_value = None
+    failure_reasons = []
+
+    def evaluate(x):
+        nonlocal best_value, best_x, best_eval
+        failure_reasons.clear()
+        eq = parent_eq.copy()
+        surf = eq.surface
         n_eval[0] += 1
         t0 = time.time()
 
@@ -206,19 +223,25 @@ def _run_desc(args, wout_tmp):
         try:
             from desc.objectives import get_fixed_boundary_constraints, ForceBalance
             constraints = get_fixed_boundary_constraints(eq=eq, profiles=True, normalize=True)
-            eq.solve(objective="force", constraints=constraints,
-                     optimizer="lsq-exact", maxiter=50, verbose=0)
+            _, solve_result = eq.solve(objective="force", constraints=constraints,
+                                       optimizer="lsq-exact", maxiter=50, verbose=0)
+            if not solve_result["success"]:
+                raise RuntimeError(solve_result["message"])
             # Quick FB check: reject if force balance exploded
             _fb_check = ForceBalance(eq=eq)
             _fb_check.build(use_jit=False, verbose=0)
             _fb_post = np.asarray(_fb_check.compute(eq.params_dict), dtype=float)
             _fb_rms_post = float(np.sqrt(np.mean(_fb_post**2)))
+            if not np.isfinite(_fb_rms_post):
+                raise ValueError("nonfinite force residual")
             if _fb_rms0[0] is None:
                 _fb_rms0[0] = max(_fb_rms_post, 1.0)
             elif _fb_rms_post > 500.0 * _fb_rms0[0] and _fb_rms_post > 1e6:
+                _append_history_row(objective=INVALID_TOTAL + _fb_rms_post)
                 return INVALID_TOTAL + _fb_rms_post
         except Exception as exc:
             print(f"    [DESC #{n_eval[0]}] solve FAILED: {exc}")
+            _append_history_row(objective=INVALID_TOTAL)
             return INVALID_TOTAL
 
         # ── 3. Save DESC eq as VMEC wout, run VMEC for SQuID core ──
@@ -228,6 +251,7 @@ def _run_desc(args, wout_tmp):
             vmec_ro.run()
         except Exception as exc:
             print(f"    [DESC #{n_eval[0]}] VMEC bridge FAILED: {exc}")
+            _append_history_row(objective=INVALID_TOTAL)
             return INVALID_TOTAL
 
         # ── 4. SQuID core evaluation (QI, maxJ, Bmin) ──
@@ -236,6 +260,8 @@ def _run_desc(args, wout_tmp):
                 vmec_ro, s_vals, alphas,
                 args.num_pitch, T_J=-0.06, mboz=args.mboz, nboz=args.nboz,
             )
+            if not info.get("common_B_valid", True):
+                failure_reasons.append("common B range")
             f_maxJ = info["f_maxJ"]
             f_QI = info["f_QI"]
             delta = info["mirror_ratio"]
@@ -243,6 +269,7 @@ def _run_desc(args, wout_tmp):
             iota_ed = info["iota_edge"]
         except Exception as exc:
             print(f"    [DESC #{n_eval[0]}] SQuID core FAILED: {exc}")
+            _append_history_row(objective=INVALID_TOTAL)
             return INVALID_TOTAL
 
         # ── 5. Bmin penalty ──
@@ -252,6 +279,7 @@ def _run_desc(args, wout_tmp):
             f_Bmin = float(np.sum(bmin_res ** 2))
         except Exception:
             f_Bmin = INVALID
+            failure_reasons.append("Bmin")
 
         # ── 6. R2 QI (optional) ──
         f_QI_R2 = 0.0
@@ -269,6 +297,7 @@ def _run_desc(args, wout_tmp):
                 f_QI_R2 = float(np.sum(qi_r2_res ** 2))
             except Exception:
                 f_QI_R2 = INVALID
+                failure_reasons.append("QI_R2")
 
         # ── 6b. High-B Boozer contour topology (optional) ──
         f_highB = 0.0
@@ -297,12 +326,15 @@ def _run_desc(args, wout_tmp):
                 f_highB = float(np.sum(highB_res ** 2))
             except Exception as exc:
                 f_highB = INVALID
+                failure_reasons.append("highB")
                 print(f"    [DESC #{n_eval[0]}] High-B topology FAILED: {exc}")
 
         # ── 7. Aspect ratio ──
         try:
             aspect = float(vmec_ro.aspect())
         except Exception:
+            if args.w_ar:
+                failure_reasons.append("aspect ratio")
             aspect = args.aspect_target
 
         # ── 8. Beta ──
@@ -321,6 +353,8 @@ def _run_desc(args, wout_tmp):
 
         # ── 10. Mirror, beta, iota penalties ──
         f_mirror = _compute_mirror_penalty(delta, getattr(args, 'mirror_target', 0.20))
+        if args.w_beta and not np.isfinite(beta):
+            failure_reasons.append("beta")
         f_beta = _compute_beta_penalty(beta, getattr(args, 'beta_target', 0.02))
         f_iota = _compute_iota_penalty(
             iota_ax, iota_ed, args.iota_ax, args.iota_edge,
@@ -337,6 +371,7 @@ def _run_desc(args, wout_tmp):
                     method=getattr(args, 'itg_method', 'drift_curvature')).total()
             except Exception:
                 f_gs = INVALID
+                failure_reasons.append("ITG")
 
         # ── 12. Mercier margin (from VMEC wout — DESC-saved) ──
         dmerc_vmec_raw_min = np.nan
@@ -370,6 +405,7 @@ def _run_desc(args, wout_tmp):
                     dmerc_neg = int(np.sum(vals < 0))
             except Exception:
                 f_mercier_margin = INVALID
+                failure_reasons.append("Mercier")
 
         # ── 13. Well depth ──
         well_depth = np.nan
@@ -382,6 +418,7 @@ def _run_desc(args, wout_tmp):
                 f_well = hinge_loss(getattr(args, 'target_well', 0.01) - well_depth, 0.0)
             except Exception:
                 f_well = INVALID
+                failure_reasons.append("well")
 
         # ── 14. Ballooning (evaluated on DESC eq — already force-balanced) ──
         balloon_n = -1
@@ -412,6 +449,7 @@ def _run_desc(args, wout_tmp):
                 f_ballooning = float(np.mean(np.array(lam_residuals, dtype=float) ** 2))
             except Exception as exc:
                 f_ballooning = 1e4
+                failure_reasons.append("ballooning")
                 balloon_n = -1
                 balloon_lam = np.nan
                 print(f"    [DESC #{n_eval[0]}] Ballooning FAILED: {exc}")
@@ -439,6 +477,7 @@ def _run_desc(args, wout_tmp):
                 f_fb = max(fb_rms / _fb_rms0[0] - 1.0, 0.0)
             except Exception:
                 f_fb = INVALID
+                failure_reasons.append("force_balance")
 
         # ── 16. Regularisation ──
         f_reg = float(np.sum((x - x0) ** 2))
@@ -545,7 +584,7 @@ def _run_desc(args, wout_tmp):
         print(f"    [DESC #{n_eval[0]}]  {'  '.join(parts)}")
 
         _append_history_row(
-            f_QI=f_QI, f_maxJ=f_maxJ, f_Bmin=f_Bmin,
+            objective=total, f_QI=f_QI, f_maxJ=f_maxJ, f_Bmin=f_Bmin,
             delta=delta, iota_ax=iota_ax, iota_ed=iota_ed,
             beta=beta, f_gs=f_gs, well=well_depth,
             f_highB=f_highB,
@@ -567,49 +606,59 @@ def _run_desc(args, wout_tmp):
             except Exception:
                 pass
 
+        if (np.isfinite(total) and not hard_gate_reasons and not failure_reasons
+                and total < best_value):
+            shutil.copyfile(wout_tmp, best_file)
+            best_value, best_x, best_eval = float(total), np.array(x, copy=True), n_eval[0]
         return total
 
     # ═══════════════════════════════════════════════════════════════
     # Run optimisation
     # ═══════════════════════════════════════════════════════════════
 
-    print(f"\n  Evaluating initial state (with force-balance solve) ...")
-    obj0 = objective(x0)
-    x_save = x0.copy()
+    def objective(x):
+        nonlocal initial_value
+        value = evaluate(x)
+        if initial_value is None:
+            initial_value = float(value)
+        return value
 
     if args.maxiter > 0:
-        max_total_evals = int(getattr(args, "max_total_evals", 0) or 0)
-        cap_msg = f", max_evals={max_total_evals}" if max_total_evals > 0 else ""
-        print(f"\n  Starting Nelder-Mead (maxiter={args.maxiter}{cap_msg}) ...")
-        t_start = time.time()
-
         options = dict(maxiter=args.maxiter, xatol=1e-5, fatol=1e-4, adaptive=True)
-        if max_total_evals > 0:
-            options["maxfev"] = max_total_evals
-
-        result = minimize(
-            objective, x0, method="Nelder-Mead", options=options,
-        )
-        x_save = np.asarray(result.x, dtype=float).copy()
-        t_total = time.time() - t_start
-        print(f"\n  Finished in {t_total / 60:.1f} min  ({n_eval[0]} evals)")
-        print(f"  Optimizer message: {result.message}")
+        if args.max_total_evals > 0:
+            options["maxfev"] = args.max_total_evals
+        # Nelder-Mead evaluates x0 first. Its budget includes this call.
+        result = minimize(objective, x0, method="Nelder-Mead", options=options)
+        message = str(result.message)
+        state = {0: "converged", 1: "evaluation_cap", 2: "iteration_limit"}.get(
+            result.status, "solver_failed")
+        final_value = float(result.fun)
+        chosen = result.x
     else:
-        print("\n  maxiter <= 0: initial evaluation only; optimisation skipped.")
+        final_value = objective(x0)
+        chosen = x0
+        state, message = "initial_only", "Initial evaluation only"
 
-    print(f"\n  Initial objective = {obj0:.4e}")
-
-    # ── Save final equilibrium ──
-    out_wout = os.path.join(run_dir, "wout_desc_optimized.nc")
-    new_R = np.asarray(R0).copy()
-    new_Z = np.asarray(Z0).copy()
-    new_R[free_idx_R] = x_save[:nR]
-    new_Z[free_idx_Z] = x_save[nR:]
-    surf.R_lmn = new_R
-    surf.Z_lmn = new_Z
-    from desc.objectives import get_fixed_boundary_constraints
-    constraints = get_fixed_boundary_constraints(eq=eq, profiles=True, normalize=True)
-    eq.solve(objective="force", constraints=constraints,
-             optimizer="lsq-exact", maxiter=50, verbose=0)
-    VMECIO.save(eq, out_wout, surfs=args.ns_vmec, verbose=0)
-    print(f"  Saved: {out_wout}")
+    output = None
+    candidate_eval = None
+    if state in ("converged", "initial_only"):
+        if (best_x is None or best_value != final_value
+                or not np.array_equal(best_x, chosen)):
+            state = "candidate_rejected"
+            message += "; selected point lacks a matching finite, gate-passing evaluation"
+        else:
+            output = ("wout_desc_optimized.nc" if state == "converged"
+                      else "wout_desc_initial.nc")
+            os.replace(best_file, os.path.join(run_dir, output))
+            candidate_eval = best_eval
+    status = {
+        "state": state, "accepted": state == "converged", "solver_message": message,
+        "initial_objective": initial_value if np.isfinite(initial_value) else None,
+        "final_objective": final_value if np.isfinite(final_value) else None,
+        "evaluations": n_eval[0], "candidate_evaluation": candidate_eval,
+        "output_file": output,
+    }
+    with open(os.path.join(run_dir, "run_status.json"), "w") as handle:
+        json.dump(status, handle, indent=2, allow_nan=False)
+    print(f"  {state}: {message} ({n_eval[0]} evaluations)")
+    return status

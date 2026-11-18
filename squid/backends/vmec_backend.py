@@ -8,7 +8,6 @@ and the LeastSquaresProblem interface.
 import os
 
 import time
-import glob
 import csv
 import json
 import shutil
@@ -21,7 +20,8 @@ import netCDF4
 from simsopt.mhd import Vmec
 from simsopt._core import Optimizable
 from simsopt.objectives import LeastSquaresProblem
-from simsopt.solve import least_squares_serial_solve
+from simsopt._core.finite_difference import FiniteDifference
+from scipy.optimize import least_squares
 
 from ..utils.vmec_input import wout_to_input
 from ..objectives.maxj_residual import _evaluate_squid
@@ -732,6 +732,9 @@ def run_vmec(args):
                     [np.sqrt(INVALID_OBJECTIVE) if hard_violation else 0.0]
                 )
             except Exception as exc:
+                if (args.hard_gate_iota_topology or args.w_iota_profile or
+                        args.w_iota_shear or args.w_iota_monotonic):
+                    self._failed_terms.append("Iota topology")
                 print(f"    [SQuID #{self._n}] Iota topology FAILED: {exc}")
                 self._iota_profile_residuals = self._large_like(self._iota_profile_residuals)
                 self._iota_shear_residuals = self._large_like(self._iota_shear_residuals)
@@ -751,6 +754,7 @@ def run_vmec(args):
                 raise EvaluationLimitReached(
                     f"Reached --max_total_evals={max_total_evals}"
                 )
+            self._failed_terms = []
             self._n += 1
             t0 = time.time()
             try:
@@ -759,6 +763,7 @@ def run_vmec(args):
                     args.num_pitch, T_J=-0.06, mboz=args.mboz, nboz=args.nboz,
                 )
             except Exception as exc:
+                self._failed_terms.append("SQuID core")
                 print(f"    [SQuID #{self._n}] FAILED: {exc}")
                 info = dict(f_maxJ=INVALID_OBJECTIVE, f_QI=INVALID_OBJECTIVE,
                             f_Bmin=INVALID_OBJECTIVE,
@@ -769,6 +774,8 @@ def run_vmec(args):
                             iota_axis=0.0, iota_edge=0.0,
                             B_min=0.0, B_max=0.0,
                             surface_Bmin=np.full_like(s_vals, np.nan))
+            if not info.get("common_B_valid", True):
+                self._failed_terms.append("common B range")
             self._fmaxj = info["f_maxJ"]
             self._fqi = info["f_QI"]
             self._fbmin = info.get("f_Bmin", 0.0)
@@ -815,6 +822,7 @@ def run_vmec(args):
                         self._local_maxj_residuals = np.zeros(1)
                         self._local_maxj_metrics = {"rms": 0.0, "max": 0.0, "count": 0}
                 except Exception as exc:
+                    self._failed_terms.append("local maxJ target")
                     print(f"    [SQuID #{self._n}] local maxJ target FAILED: {exc}")
                     self._local_maxj_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
                     self._local_maxj_metrics = {
@@ -825,6 +833,8 @@ def run_vmec(args):
                     s_vals, info["surface_Bmin"], args.bmin_slope_target)
                 self._fbmin = float(np.sum(self._bmin_residuals ** 2))
             except Exception as exc:
+                if args.w_bmin:
+                    self._failed_terms.append("B_min target")
                 print(f"    [SQuID #{self._n}] B_min target FAILED: {exc}")
                 self._fbmin = INVALID_OBJECTIVE
                 self._bmin_residuals = self._large_like(self._bmin_residuals)
@@ -845,6 +855,7 @@ def run_vmec(args):
                     self._fgs = ITGResidual(
                         vmec, s_grad, method=args.itg_method).total()
                 except Exception as exc:
+                    self._failed_terms.append("ITG target")
                     print(f"    [SQuID #{self._n}] ITG target FAILED: {exc}")
                     self._fgs = INVALID_OBJECTIVE
 
@@ -877,6 +888,7 @@ def run_vmec(args):
                         self._dmerc_flux_normalized_min = float(np.nanmin(vals))
                         self._dmerc_negative_count = int(np.sum(vals < 0))
                 except Exception as exc:
+                    self._failed_terms.append("Mercier target")
                     print(f"    [SQuID #{self._n}] Mercier target FAILED: {exc}")
                     self._mercier_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
                     self._fmercier = INVALID_OBJECTIVE
@@ -905,6 +917,7 @@ def run_vmec(args):
                             self._dmerc_flux_normalized_min = float(np.nanmin(vals))
                             self._dmerc_negative_count = int(np.sum(vals < 0))
                 except Exception as exc:
+                    self._failed_terms.append("Mercier margin target")
                     print(f"    [SQuID #{self._n}] Mercier margin target FAILED: {exc}")
                     self._mercier_margin_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
                     if getattr(args, 'w_mercier', 0.0) <= 0:
@@ -940,6 +953,7 @@ def run_vmec(args):
                     ):
                         hard_res.append(np.sqrt(INVALID_OBJECTIVE))
                 except Exception as exc:
+                    self._failed_terms.append("Hard MHD gate")
                     print(f"    [SQuID #{self._n}] Hard MHD gate FAILED: {exc}")
                     hard_res.append(np.sqrt(INVALID_OBJECTIVE))
                 hard_beta_max = float(getattr(args, 'hard_beta_max', float('inf')))
@@ -1006,6 +1020,7 @@ def run_vmec(args):
                     self._ballooning_lam_raw = np.array(lam_raw_values, dtype=float)
                     self._ballooning_residuals = np.array(lam_residuals, dtype=float)
                 except Exception as exc:
+                    self._failed_terms.append("Ballooning")
                     print(f"    [SQuID #{self._n}] Ballooning FAILED: {exc}")
                     self._ballooning_residuals = np.full(len(b_rhos) * len(b_alphas), np.sqrt(INVALID_OBJECTIVE))
                     self._ballooning_lam_raw = np.full(len(b_rhos) * len(b_alphas), np.nan)
@@ -1055,6 +1070,7 @@ def run_vmec(args):
                         self._fb_rms0 = max(_fb_rms, 1.0)
                     self._fb_residuals = np.array([np.sqrt(max(_fb_rms / self._fb_rms0 - 1.0, 0.0))])
                 except Exception as exc:
+                    self._failed_terms.append("Force-balance")
                     print(f"    [SQuID #{self._n}] Force-balance FAILED: {exc}")
                     self._fb_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
 
@@ -1111,11 +1127,12 @@ def run_vmec(args):
                     self._coil_proxy_residual_phi = np.array([_r["phi"]])
                     hard_bn = float(getattr(args, "hard_coil_proxy_bn_max", np.inf))
                     bn_max = float(self._coil_proxy_metrics.get("Bn_max_abs_unitless", np.nan))
-                    if np.isfinite(hard_bn) and np.isfinite(bn_max) and bn_max > hard_bn:
+                    if np.isfinite(hard_bn) and (not np.isfinite(bn_max) or bn_max > hard_bn):
                         self._coil_proxy_hard_bn_residual = np.array([np.sqrt(INVALID_OBJECTIVE)])
                     else:
                         self._coil_proxy_hard_bn_residual = np.zeros(1)
                 except Exception as exc:
+                    self._failed_terms.append("Coil proxy")
                     print(f"    [SQuID #{self._n}] Coil proxy FAILED: {exc}")
                     bad = np.array([np.sqrt(INVALID_OBJECTIVE)])
                     self._coil_proxy_residual_bn = bad
@@ -1138,6 +1155,7 @@ def run_vmec(args):
                         oops_harmonics_residuals(_wout_oops, args)
                     )
                 except Exception as exc:
+                    self._failed_terms.append("OOPS residual")
                     print(f"    [SQuID #{self._n}] OOPS residual FAILED: {exc}")
                     self._oops_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
                     self._oops_metrics = {"ok": False, "error": repr(exc)}
@@ -1267,6 +1285,7 @@ def run_vmec(args):
                         dtype=float,
                     )
                 except Exception as exc:
+                    self._failed_terms.append("Boundary curvature")
                     print(f"    [SQuID #{self._n}] Boundary curvature FAILED: {exc}")
                     self._boundary_curvature_residuals = np.full(6, np.sqrt(INVALID_OBJECTIVE))
                     self._boundary_curvature_metrics = {}
@@ -1281,6 +1300,7 @@ def run_vmec(args):
                             vmec, args, skip_hard=(self._n == 1))
                     )
                 except Exception as exc:
+                    self._failed_terms.append("Rational placement")
                     print(f"    [SQuID #{self._n}] Rational placement FAILED: {exc}")
                     self._rational_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
                     self._rational_metrics = {}
@@ -1292,6 +1312,7 @@ def run_vmec(args):
                         compute_pdrot_from_vmec(vmec, args)
                     )
                 except Exception as exc:
+                    self._failed_terms.append("pdrot")
                     print(f"    [SQuID #{self._n}] pdrot FAILED: {exc}")
                     self._pdrot_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
                     self._pdrot_metrics = {}
@@ -1551,7 +1572,7 @@ def run_vmec(args):
 
         def hard_mhd_penalty(self):
             self._compute()
-            return self._hard_mhd_residuals
+            return np.array([np.linalg.norm(self._hard_mhd_residuals)])
 
         def ballooning_penalty(self):
             self._compute()
@@ -1714,7 +1735,7 @@ def run_vmec(args):
 
     max_nfev = args.maxiter * (n_dofs + 1)
     max_total_evals = int(getattr(args, "max_total_evals", 0) or 0)
-    cap_reached = False
+    state, message = "initial_only", "Initial evaluation only"
     solve_start = np.array(vmec.x, dtype=float)
     abs_step = getattr(args, 'abs_step', 1e-4)
     rel_step = getattr(args, 'rel_step', 0.0)
@@ -1740,63 +1761,63 @@ def run_vmec(args):
             )
         try:
             with _run_in_directory(run_dir):
-                least_squares_serial_solve(
-                    prob, max_nfev=max_nfev, grad=True,
-                    abs_step=abs_step, rel_step=rel_step,
-                    **solve_kwargs,
-                )
+                jac = FiniteDifference(prob.residuals, abs_step=abs_step, rel_step=rel_step)
+                result = least_squares(prob.residuals, solve_start, jac=jac.jac,
+                                       max_nfev=max_nfev, verbose=2, **solve_kwargs)
+                prob.x = result.x
+            state = ("converged" if result.success else
+                     "solver_evaluation_limit" if result.status == 0 else "solver_failed")
+            message = str(result.message)
         except EvaluationLimitReached as exc:
-            cap_reached = True
+            state, message = "evaluation_cap_recovered_start", str(exc)
             vmec.x = solve_start
-            squid._cache_x = None
-            print(f"\n  Stopped by evaluation cap: {exc}")
-            print("  Restored the pre-solve state; the last trial is not accepted.")
         t_total = time.time() - t_start
         print(f"\n  Finished in {t_total / 60:.1f} min  ({squid._n} evals)")
     else:
         print("\n  maxiter <= 0: initial evaluation only; optimisation skipped.")
 
-    try:
-        if cap_reached:
-            raise EvaluationLimitReached("evaluation cap already reached")
-        with _run_in_directory(run_dir):
-            obj_f = prob.objective()
-    except EvaluationLimitReached:
-        obj_f = np.nan
-        print("  Final objective skipped after evaluation-cap recovery.")
-    print(f"\n  Initial objective = {obj0:.4e}")
-    if np.isfinite(obj_f):
-        print(f"  Final objective   = {obj_f:.4e}")
-    else:
-        print("  Final objective   = unavailable after evaluation-cap stop")
+    obj_f = None
+    reasons = []
+    if state in ("initial_only", "converged"):
+        try:
+            with _run_in_directory(run_dir):
+                obj_f = float(prob.objective())
+            reasons.extend(squid._failed_terms)
+            if not np.isfinite(obj_f) or np.all(prob.cache == prob.fail):
+                reasons.append("invalid final objective")
+            if qi_r2 is not None and qi_r2.evaluation_failed:
+                reasons.append("QI R2")
+            if args.hard_gate_mhd and np.any(squid._hard_mhd_residuals):
+                reasons.append("hard MHD gate")
+            if args.hard_gate_iota_topology and np.any(squid._hard_iota_topology_residuals):
+                reasons.append("hard iota topology gate")
+            if np.isfinite(args.hard_coil_proxy_bn_max) and np.any(squid._coil_proxy_hard_bn_residual):
+                reasons.append("hard coil Bn gate")
+            if args.hard_rational_crossing and squid._rational_metrics.get("hard_crossing_count", 1):
+                reasons.append("hard rational crossing")
+            if reasons:
+                state = "candidate_rejected"
+        except EvaluationLimitReached as exc:
+            state, message = "evaluation_cap_recovered_start", str(exc)
+            vmec.x = solve_start
+    elif state == "solver_evaluation_limit":
+        obj_f = float(2 * result.cost)
 
-    output_name = (
-        "input.squid_unaccepted_cap" if cap_reached else "input.squid_optimized"
-    )
-    out_path = os.path.join(run_dir, output_name)
-    try:
-        vmec.write_input(out_path)
-        print(f"\n  Saved: {out_path}")
-    except Exception as e:
-        print(f"\n  Could not save: {e}")
-
+    names = {"converged": "input.squid_optimized", "initial_only": "input.squid_initial",
+             "evaluation_cap_recovered_start": "input.squid_unaccepted_cap"}
+    output_name = names.get(state)
+    if output_name:
+        target = os.path.join(run_dir, output_name)
+        vmec.write_input(target + ".tmp")
+        os.replace(target + ".tmp", target)
     status = {
-        "accepted": not cap_reached,
-        "state": (
-            "evaluation_cap_recovered_start"
-            if cap_reached else ("initial_only" if max_nfev <= 0 else "completed")
-        ),
-        "input_file": output_name,
-        "initial_objective": float(obj0),
-        "final_objective": float(obj_f) if np.isfinite(obj_f) else None,
+        "accepted": state == "converged", "state": state, "solver_message": message,
+        "rejection_reasons": reasons, "input_file": output_name,
+        "initial_objective": float(obj0) if np.isfinite(obj0) else None,
+        "final_objective": obj_f if obj_f is not None and np.isfinite(obj_f) else None,
         "evaluations": int(squid._n),
     }
     with open(os.path.join(run_dir, "run_status.json"), "w") as handle:
-        json.dump(status, handle, indent=2)
-
-    for dat in glob.glob(os.path.join(run_dir, "simsopt_*.dat")):
-        try:
-            os.remove(dat)
-        except OSError:
-            pass
+        json.dump(status, handle, indent=2, allow_nan=False)
+    print(f"  {state}: {message} ({squid._n} evaluations)")
     return status

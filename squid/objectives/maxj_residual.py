@@ -223,7 +223,7 @@ def _evaluate_squid(vmec_ro, s_vals, alphas, num_pitch, T_J, mboz, nboz):
     b_lo = max(b[0] for b in all_bs)
     b_hi = min(b[-1] for b in all_bs)
     if b_lo >= b_hi:
-        return dict(f_maxJ=1e6, f_QI=1e6, mirror_ratio=mirror_ratio,
+        return dict(common_B_valid=False, f_maxJ=1e6, f_QI=1e6, mirror_ratio=mirror_ratio,
                     f_maxJ_raw=1e6, f_QI_raw=1e6,
                     maxj_residuals=np.array([1e3]),
                     qi_residuals=np.array([1e3]),

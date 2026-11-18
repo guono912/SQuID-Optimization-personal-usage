@@ -32,6 +32,7 @@ os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import argparse
 import math
+import tempfile
 from difflib import get_close_matches
 import json
 from datetime import datetime
@@ -812,6 +813,20 @@ def _write_resolved_parameters(args, config):
             "pass --overwrite_run_dir only for an intentional destructive rerun."
         )
     run_dir.mkdir(parents=True, exist_ok=True)
+    if args.overwrite_run_dir:
+        # Preserve previous candidates, but keep them out of the new result namespace.
+        old = [run_dir / name for name in (
+            "run_status.json", "input.squid_optimized", "wout_desc_optimized.nc",
+            "input.squid_unaccepted_cap", "input.squid_initial", "wout_desc_initial.nc",
+        ) if (run_dir / name).is_file()]
+        if old:
+            previous = Path(tempfile.mkdtemp(prefix="previous-result-", dir=run_dir))
+            for path in old:
+                archived = path.rename(previous / path.name)
+                for key in ("nc_file", "vmec_input_file"):
+                    value = getattr(args, key, None)
+                    if value and Path(value).resolve() == path:
+                        setattr(args, key, str(archived))
     args.run_dir = str(run_dir)
     args.run_name = run_name
 
@@ -889,6 +904,9 @@ def main(argv=None):
         from ..backends.vmec_backend import run_vmec
         result = run_vmec(args)
 
+    if isinstance(result, dict) and result.get("state") == "initial_only":
+        print("Initial evaluation completed.")
+        return 0
     if isinstance(result, dict) and not result.get("accepted", True):
         print(f"\n{'=' * 60}")
         print("Run completed without an accepted optimization result.")

@@ -85,9 +85,8 @@ python scripts/util/nc_to_neort.py --help
 - Always pass an explicit run/output path outside the source tree.
 - Optimization refuses a non-empty `run_dir` by default. Use a new directory;
   `--overwrite_run_dir` is an explicit recovery-only override.
-- An evaluation-cap stop exits nonzero and writes
-  `input.squid_unaccepted_cap` plus `run_status.json`; it never creates a false
-  `input.squid_optimized` candidate.
+- Both backends record budget stops in `run_status.json` and exit with code 2.
+  A VMEC total-evaluation-cap stop also writes `input.squid_unaccepted_cap`.
 - Never generate `wout`, VMEC input, `threed1`, `simsopt_*.dat`, plots, or
   solver scratch in the source root.
 - Preserve `input_parameter.resolved.json`, history, command, source hash, and

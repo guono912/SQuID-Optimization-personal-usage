@@ -180,6 +180,7 @@ class QIResidual(Optimizable):
         self._cache_x = None
         self._residuals = None
         self._warned_failure = False
+        self.evaluation_failed = False
 
     def _fallback_residuals(self):
         if self._residuals is not None:
@@ -203,7 +204,9 @@ class QIResidual(Optimizable):
                 self.vmec, self.snorms, self.nphi, self.nalpha,
                 self.nBj, self.mpol, self.ntor, self.arr_out,
             )
+            self.evaluation_failed = False
         except Exception as exc:
+            self.evaluation_failed = True
             if not self._warned_failure:
                 print(f"[QIResidual] QI R2 evaluation failed; using large residual penalty: {exc}")
                 self._warned_failure = True

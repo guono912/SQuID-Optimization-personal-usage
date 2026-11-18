@@ -16,7 +16,7 @@ from __future__ import annotations
 import numpy as np
 
 
-MERCIER_CONVENTION_VERSION = "squid-flux-normalized-v1"
+MERCIER_CONVENTION_VERSION = "squid-flux-normalized-full-grid-v2"
 MERCIER_FLUX_NORMALIZATION = "Phi_edge^2 * VMEC.DMerc"
 
 
@@ -50,26 +50,14 @@ def flux_normalize_mercier(values, source_or_flux):
     return np.asarray(values, dtype=float) * phi_edge**2
 
 
-def vmec_half_grid_profile(values, ns=None):
-    """Return a VMEC radial diagnostic on its physical half-grid.
+def mercier_interior_profile(values, ns=None):
+    """Return interior full-grid radii and values, excluding both endpoints."""
+    values = np.asarray(values, dtype=float)
+    ns = values.size if ns is None else ns
+    if ns < 3 or values.shape != (ns,):
+        raise ValueError("expected a complete one-dimensional Mercier profile with ns >= 3")
+    return np.arange(1, ns - 1) / (ns - 1), values[1:-1]
 
-    VMEC stores Mercier profiles with a leading non-physical placeholder, so
-    an array of length ``ns`` represents ``ns - 1`` samples at
-    ``(j - 1/2) / (ns - 1)``, for ``j = 1, ..., ns - 1``.
-    """
-    values = np.asarray(values, dtype=float).reshape(-1)
-    ns = int(values.size if ns is None else ns)
-    if ns < 2:
-        raise ValueError("VMEC half-grid profiles require ns >= 2")
-    if values.size == ns:
-        values = values[1:]
-    if values.size != ns - 1:
-        raise ValueError(
-            f"expected VMEC half-grid profile of length {ns - 1}, "
-            f"got {values.size}"
-        )
-    s_half = (np.arange(ns - 1, dtype=float) + 0.5) / (ns - 1)
-    return s_half, values
 
 
 def mercier_profiles(source):
@@ -100,8 +88,8 @@ def mercier_summary(source, s_min=0.1, s_max=0.95):
     result = mercier_profiles(source)
     raw_full = result["profiles"]["DMerc"]["vmec_raw"]
     normalized_full = result["profiles"]["DMerc"]["flux_normalized"]
-    s, raw = vmec_half_grid_profile(raw_full)
-    _, normalized = vmec_half_grid_profile(normalized_full, ns=raw_full.size)
+    s, raw = mercier_interior_profile(raw_full)
+    _, normalized = mercier_interior_profile(normalized_full, ns=raw_full.size)
     mask = (
         np.isfinite(raw)
         & np.isfinite(normalized)

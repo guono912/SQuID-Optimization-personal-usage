@@ -131,7 +131,7 @@ class TestCoreModules(unittest.TestCase):
             edge_toroidal_flux_wb,
             mercier_profiles,
             mercier_summary,
-            vmec_half_grid_profile,
+            mercier_interior_profile,
         )
 
         class Wout:
@@ -149,13 +149,13 @@ class TestCoreModules(unittest.TestCase):
             profiles["profiles"]["DWell"]["flux_normalized"],
             Wout.DWell * 0.02**2,
         )
-        s_half, values = vmec_half_grid_profile(Wout.DMerc)
-        np.testing.assert_allclose(s_half, [0.25, 0.75])
-        np.testing.assert_allclose(values, [-2.0, 3.0])
-        summary = mercier_summary(Wout(), s_min=0.2, s_max=0.3)
+        s, values = mercier_interior_profile(Wout.DMerc)
+        np.testing.assert_allclose(s, [0.5])
+        np.testing.assert_allclose(values, [-2.0])
+        summary = mercier_summary(Wout(), s_min=0.5, s_max=0.5)
         self.assertAlmostEqual(summary["dmerc_vmec_raw_min"], -2.0)
         self.assertAlmostEqual(summary["dmerc_flux_normalized_min"], -0.0008)
-        self.assertAlmostEqual(summary["minimum_s"], 0.25)
+        self.assertAlmostEqual(summary["minimum_s"], 0.5)
         self.assertEqual(summary["dmerc_negative_count"], 1)
 
     def test_mercier_flux_normalization_rejects_missing_phi(self):
@@ -461,14 +461,14 @@ class TestWithVMEC(unittest.TestCase):
         self.assertIn("1/3", labels)
         self.assertIn("-2/7", labels)
 
-    def test_physical_report_uses_vmec_half_grid(self):
+    def test_mercier_profile_excludes_both_endpoints(self):
         from squid.diagnostics.mercier_normalization import (
-            vmec_half_grid_profile,
+            mercier_interior_profile,
         )
 
-        s, values = vmec_half_grid_profile(np.arange(5.0), ns=5)
-        np.testing.assert_allclose(s, [0.125, 0.375, 0.625, 0.875])
-        np.testing.assert_allclose(values, [1.0, 2.0, 3.0, 4.0])
+        s, values = mercier_interior_profile(np.arange(5.0), ns=5)
+        np.testing.assert_allclose(s, [0.25, 0.5, 0.75])
+        np.testing.assert_allclose(values, [1.0, 2.0, 3.0])
 
 
 if __name__ == "__main__":

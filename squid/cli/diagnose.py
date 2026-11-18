@@ -34,6 +34,7 @@ from squid.diagnostics.iota_rationals import (  # noqa: E402
 from squid.diagnostics.mercier_normalization import (  # noqa: E402
     MERCIER_CONVENTION_VERSION,
     edge_toroidal_flux_wb,
+    mercier_interior_profile,
     flux_normalize_mercier,
 )
 from squid.utils.jax_runtime import initialize_requested_jax_backend  # noqa: E402
@@ -1060,17 +1061,15 @@ def main():
             dmerc_raw = vmec.wout.DMerc
         else:
             dmerc_raw = vmec.wout.Dmerc
-        dmerc_raw_full = np.array(dmerc_raw[1:], dtype=float)
+        s_mercier, dmerc_raw_full = mercier_interior_profile(dmerc_raw)
         dmerc_full = flux_normalize_mercier(dmerc_raw_full, vmec.wout)
-        s_half_full = np.array(vmec.s_half_grid, dtype=float)
         mhd_mask = (
-            (s_half_full >= args.mhd_s_min)
-            & (s_half_full <= args.mhd_s_max)
+            (s_mercier >= args.mhd_s_min)
+            & (s_mercier <= args.mhd_s_max)
         )
         dmerc = dmerc_full[mhd_mask]
-        s_half = s_half_full[mhd_mask]
         mercier_data = {
-            "s": s_half,
+            "s": s_mercier[mhd_mask],
             "values": dmerc,
             "raw_values": dmerc_raw_full[mhd_mask],
             "edge_toroidal_flux_wb": edge_toroidal_flux_wb(vmec.wout),

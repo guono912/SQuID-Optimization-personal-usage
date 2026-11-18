@@ -36,7 +36,7 @@ from ..diagnostics.mercier_normalization import (
     MERCIER_CONVENTION_VERSION,
     flux_normalize_mercier,
     mercier_profiles,
-    vmec_half_grid_profile,
+    mercier_interior_profile,
 )
 
 
@@ -200,7 +200,7 @@ def _compute_well_penalty(vmec_ro, target_well):
 def _mercier_residuals(vmec_ro, s_min=0.1, s_max=0.95):
     try:
         dmerc_full = flux_normalize_mercier(vmec_ro.wout.DMerc, vmec_ro.wout)
-        s, dmerc = vmec_half_grid_profile(dmerc_full)
+        s, dmerc = mercier_interior_profile(dmerc_full)
         mask = np.isfinite(dmerc) & (s >= s_min) & (s <= s_max)
         vals = dmerc[mask]
         if vals.size == 0:
@@ -617,8 +617,8 @@ def run_vmec(args):
                 phi_edge = mercier["edge_toroidal_flux_wb"]
                 dmerc_raw_full = mercier["profiles"]["DMerc"]["vmec_raw"]
                 dmerc_fluxnorm_full = mercier["profiles"]["DMerc"]["flux_normalized"]
-                s, dmerc_raw = vmec_half_grid_profile(dmerc_raw_full)
-                _, dmerc_fluxnorm = vmec_half_grid_profile(
+                s, dmerc_raw = mercier_interior_profile(dmerc_raw_full)
+                _, dmerc_fluxnorm = mercier_interior_profile(
                     dmerc_fluxnorm_full, ns=dmerc_raw_full.size
                 )
                 mask_mid = (
@@ -660,10 +660,10 @@ def run_vmec(args):
                 ):
                     if name in mercier["profiles"]:
                         component = mercier["profiles"][name]
-                        _, component_raw = vmec_half_grid_profile(
+                        _, component_raw = mercier_interior_profile(
                             component["vmec_raw"], ns=dmerc_raw_full.size
                         )
-                        _, component_fluxnorm = vmec_half_grid_profile(
+                        _, component_fluxnorm = mercier_interior_profile(
                             component["flux_normalized"], ns=dmerc_raw_full.size
                         )
                         raw_min, vmin_s = self._profile_min(
@@ -872,7 +872,7 @@ def run_vmec(args):
             if getattr(args, 'w_mercier', 0.0) > 0:
                 try:
                     dmerc_full = flux_normalize_mercier(vmec.wout.DMerc, vmec.wout)
-                    s, dmerc = vmec_half_grid_profile(dmerc_full)
+                    s, dmerc = mercier_interior_profile(dmerc_full)
                     mask = ((s >= args.mercier_s_min)
                             & (s <= args.mercier_s_max)
                             & np.isfinite(dmerc))
@@ -898,7 +898,7 @@ def run_vmec(args):
             if getattr(args, 'w_mercier_margin', 0.0) > 0:
                 try:
                     dmerc_full = flux_normalize_mercier(vmec.wout.DMerc, vmec.wout)
-                    s, dmerc = vmec_half_grid_profile(dmerc_full)
+                    s, dmerc = mercier_interior_profile(dmerc_full)
                     mask = ((s >= args.mercier_s_min)
                             & (s <= args.mercier_s_max)
                             & np.isfinite(dmerc))
@@ -931,7 +931,7 @@ def run_vmec(args):
                         dmerc_full = flux_normalize_mercier(
                             vmec.wout.DMerc, vmec.wout
                         )
-                        s, dmerc = vmec_half_grid_profile(dmerc_full)
+                        s, dmerc = mercier_interior_profile(dmerc_full)
                         mask = ((s >= args.mercier_s_min)
                                 & (s <= args.mercier_s_max)
                                 & np.isfinite(dmerc))

@@ -22,7 +22,7 @@ from ..objectives.penalties import hinge_loss
 from ..diagnostics.mercier_normalization import (
     edge_toroidal_flux_wb,
     flux_normalize_mercier,
-    vmec_half_grid_profile,
+    mercier_interior_profile,
 )
 
 # ── Config ──
@@ -164,8 +164,8 @@ def main(argv=None):
             dm_raw_full = np.array(vmec.wout.DMerc, dtype=float)
             dm_full = flux_normalize_mercier(dm_raw_full, vmec.wout)
             dm_phi_edge = edge_toroidal_flux_wb(vmec.wout)
-            s_dm, dm_raw = vmec_half_grid_profile(dm_raw_full)
-            _, dm = vmec_half_grid_profile(dm_full, ns=dm_raw_full.size)
+            s_dm, dm_raw = mercier_interior_profile(dm_raw_full)
+            _, dm = mercier_interior_profile(dm_full, ns=dm_raw_full.size)
             mask = (s_dm >= 0.1) & (s_dm <= 0.95) & np.isfinite(dm_raw)
             vals = dm[mask]
             dm_raw_min = float(np.min(dm_raw[mask])) if vals.size else np.nan

@@ -17,7 +17,7 @@ Use this as a preflight checklist when output is surprising.
 
 4. **Mercier normalization or grid drift.** Use `Phi_edge^2 * VMEC.DMerc`,
    use the producer's interior full-grid positions, and record the mask and
-   `ns`. The current half-grid interpretation shifts a point inward by
+   `ns`. The legacy v1 half-grid interpretation shifted a point inward by
    `1 / (2 * (ns - 1))` in normalized flux. See [Skill 09](skill_09_mercier_normalization.md).
 5. **Near-axis or edge samples dominate a scalar.** Report the full profile,
    minimum location, negative count, and body/axis regions separately.

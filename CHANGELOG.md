@@ -5,8 +5,8 @@
 ### Documentation
 
 - Corrected the documented Mercier radial coordinate and measured its effect
-  on a parent equilibrium and two backend candidates. The optimizer and
-  diagnostics still use the v1 radial labels; see [Skill 09](skill/skill_09_mercier_normalization.md).
+  on a parent equilibrium and two backend candidates. Both backends, diagnostics and the
+  MHD gate now use the interior full grid under a new protocol ID; see [Skill 09](skill/skill_09_mercier_normalization.md).
 - Defined the canonical two-list rational-resonance policy: nominal
   NFP-compatible harmonics versus symmetry-breaking error-field exposure.
 - Added the minimum symmetry-compatible harmonic-order formula and prohibited

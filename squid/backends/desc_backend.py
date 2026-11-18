@@ -34,7 +34,7 @@ from ..diagnostics.mercier_normalization import (
     MERCIER_CONVENTION_VERSION,
     edge_toroidal_flux_wb,
     flux_normalize_mercier,
-    vmec_half_grid_profile,
+    mercier_interior_profile,
 )
 
 INVALID = 1.0e6
@@ -385,8 +385,8 @@ def _run_desc(args, wout_tmp):
                 dmerc_raw_full = np.array(vmec_ro.wout.DMerc, dtype=float)
                 dmerc_full = flux_normalize_mercier(dmerc_raw_full, vmec_ro.wout)
                 dmerc_edge_toroidal_flux_wb = edge_toroidal_flux_wb(vmec_ro.wout)
-                s_dm, dmerc_raw = vmec_half_grid_profile(dmerc_raw_full)
-                _, dmerc = vmec_half_grid_profile(
+                s_dm, dmerc_raw = mercier_interior_profile(dmerc_raw_full)
+                _, dmerc = mercier_interior_profile(
                     dmerc_full, ns=dmerc_raw_full.size
                 )
                 mask = ((s_dm >= getattr(args, 'mercier_s_min', 0.1))
@@ -394,15 +394,16 @@ def _run_desc(args, wout_tmp):
                         & np.isfinite(dmerc_raw)
                         & np.isfinite(dmerc))
                 vals = dmerc[mask]
-                if vals.size > 0:
-                    target = float(getattr(
-                        args, 'mercier_flux_normalized_margin_target', 0.0
-                    ))
-                    mm_res = np.maximum(target - vals, 0.0)
-                    f_mercier_margin = float(np.mean(mm_res ** 2))
-                    dmerc_flux_normalized_min = float(np.nanmin(vals))
-                    dmerc_vmec_raw_min = float(np.nanmin(dmerc_raw[mask]))
-                    dmerc_neg = int(np.sum(vals < 0))
+                if not vals.size:
+                    raise ValueError("no finite Mercier samples in the requested interval")
+                target = float(getattr(
+                    args, 'mercier_flux_normalized_margin_target', 0.0
+                ))
+                mm_res = np.maximum(target - vals, 0.0)
+                f_mercier_margin = float(np.mean(mm_res ** 2))
+                dmerc_flux_normalized_min = float(np.nanmin(vals))
+                dmerc_vmec_raw_min = float(np.nanmin(dmerc_raw[mask]))
+                dmerc_neg = int(np.sum(vals < 0))
             except Exception:
                 f_mercier_margin = INVALID
                 failure_reasons.append("Mercier")

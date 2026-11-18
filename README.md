@@ -70,7 +70,7 @@ python scripts/viz/viz_report.py --nc_file "$CANDIDATE" --output_dir "$RUN/viz"
 python scripts/gate/mhd_gate.py --wout "$CANDIDATE" --output_dir "$RUN/mhd"
 ```
 
-For Mercier stability, report `Phi_edge^2 * VMEC.DMerc` on the interior full grid and record the radial interval. The current implementation uses half-grid labels for these values. Check the mask directly against the original wout before interpreting minima or negative counts. [Skill 09 gives the grid convention and measured impact](skill/skill_09_mercier_normalization.md).
+For Mercier stability, report `Phi_edge^2 * VMEC.DMerc` on the interior full grid and record the radial interval. For results labeled `squid-flux-normalized-v1`, recompute interval statistics from the original wout before comparing them with full-grid results. [Skill 09 gives the grid convention and measured impact](skill/skill_09_mercier_normalization.md).
 
 When interpreting rotational-transform profiles, distinguish field-period-compatible resonances from exposure to symmetry-breaking perturbations. A count of rational crossings alone does not give an island width. The [promotion protocol](skill/skill_04_gates_promotion.md) specifies the independent checks and resolution studies for a design claim.
 

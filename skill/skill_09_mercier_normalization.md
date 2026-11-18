@@ -17,7 +17,7 @@ major radius, minor radius, or an input-file `PHIEDGE` convention.
 
 The implementation is centralized in
 `squid/diagnostics/mercier_normalization.py` and has
-protocol ID `squid-flux-normalized-v1`. Mercier components `DShear`, `DWell`,
+protocol ID `squid-flux-normalized-full-grid-v2`. Mercier components `DShear`, `DWell`,
 `DCurr`, and `DGeod` use the same `Phi_edge^2` multiplier.
 
 ## Radial grid and affected releases
@@ -42,12 +42,13 @@ include the native VMEC edge slot near the outer edge. This finding is
 specific to Mercier and its components. Other wout variables have their own
 grid conventions.
 
-Affected consumers include both optimizer backends, QI refinement, diagnostic
+In v1, affected consumers included both optimizer backends, QI refinement, diagnostic
 summaries, component plots and the Mercier part of the MHD gate. A gate
 threshold or candidate ranking can change when the newly included or
 excluded point is decisive.
 
-Recheck interval statistics directly from the original wout before using
+Version 2 uses the interior full grid in both backends, diagnostics and gates.
+Recheck v1 interval statistics directly from the original wout before using
 them for thresholds, rankings or promotion. For a finite interior interval:
 
 ```python

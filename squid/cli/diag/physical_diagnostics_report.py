@@ -25,7 +25,7 @@ import numpy as np
 
 from ...diagnostics.mercier_normalization import (
     mercier_profiles,
-    vmec_half_grid_profile,
+    mercier_interior_profile,
 )
 from ...utils.jax_runtime import initialize_requested_jax_backend
 
@@ -166,20 +166,20 @@ def main(argv=None):
     s = np.linspace(0.0, 1.0, ns)
     rho_grid = np.sqrt(s)
     mercier = mercier_profiles(ds)
-    s_half, dmerc_raw = vmec_half_grid_profile(
+    s_mercier, dmerc_raw = mercier_interior_profile(
         mercier["profiles"]["DMerc"]["vmec_raw"], ns
     )
-    _, dmerc = vmec_half_grid_profile(
+    _, dmerc = mercier_interior_profile(
         mercier["profiles"]["DMerc"]["flux_normalized"], ns
     )
     dwell_raw = mercier["profiles"].get("DWell", {}).get("flux_normalized")
     dwell = (
-        vmec_half_grid_profile(dwell_raw, ns)[1]
+        mercier_interior_profile(dwell_raw, ns)[1]
         if dwell_raw is not None else None
     )
     dgeod_raw = mercier["profiles"].get("DGeod", {}).get("flux_normalized")
     dgeod = (
-        vmec_half_grid_profile(dgeod_raw, ns)[1]
+        mercier_interior_profile(dgeod_raw, ns)[1]
         if dgeod_raw is not None else None
     )
     iotaf = _array(ds, "iotaf")
@@ -244,10 +244,10 @@ def main(argv=None):
 
     # MHD/iota plot.
     fig, ax = plt.subplots(2, 2, figsize=(12, 8), constrained_layout=True)
-    mhd_plot_mask = (s_half >= 0.1) & (s_half <= 0.97)
+    mhd_plot_mask = (s_mercier >= 0.1) & (s_mercier <= 0.97)
     full_plot_mask = (s >= 0.1) & (s <= 0.97)
     ax[0, 0].plot(
-        s_half[mhd_plot_mask], dmerc[mhd_plot_mask], marker="o",
+        s_mercier[mhd_plot_mask], dmerc[mhd_plot_mask], marker="o",
         label=r"$\Phi_{edge}^2 D_{Merc}$",
     )
     ax[0, 0].axhline(0, color="k", lw=0.8)
@@ -263,7 +263,7 @@ def main(argv=None):
     )
     if dwell is not None:
         ax2 = ax[0, 1].twinx()
-        ax2.plot(s_half[mhd_plot_mask], dwell[mhd_plot_mask],
+        ax2.plot(s_mercier[mhd_plot_mask], dwell[mhd_plot_mask],
                  color="tab:orange", marker="s", alpha=0.75,
                  label=r"$\Phi_{edge}^2 D_{Well}$")
         ax2.set_ylabel(r"$\Phi_{edge}^2 D_{Well}$")
@@ -383,9 +383,9 @@ def main(argv=None):
             "dmerc_convention": mercier["convention"],
             "dmerc_formula": mercier["formula"],
             "dmerc_edge_toroidal_flux_wb": mercier["edge_toroidal_flux_wb"],
-            "dmerc_vmec_raw_min_s_0p1_0p97": float(np.nanmin(dmerc_raw[(s_half >= 0.1) & (s_half <= 0.97)])),
-            "dmerc_flux_normalized_min_s_0p1_0p97": float(np.nanmin(dmerc[(s_half >= 0.1) & (s_half <= 0.97)])),
-            "mercier_negative_count_s_ge_0p1": int(np.sum(dmerc[(s_half >= 0.1) & (s_half <= 0.97)] < 0)),
+            "dmerc_vmec_raw_min_s_0p1_0p97": float(np.nanmin(dmerc_raw[(s_mercier >= 0.1) & (s_mercier <= 0.97)])),
+            "dmerc_flux_normalized_min_s_0p1_0p97": float(np.nanmin(dmerc[(s_mercier >= 0.1) & (s_mercier <= 0.97)])),
+            "mercier_negative_count_s_ge_0p1": int(np.sum(dmerc[(s_mercier >= 0.1) & (s_mercier <= 0.97)] < 0)),
             "well_depth_edge": float(well_depth[-1]),
             "pressure_edge_Pa": float(presf[-1]),
         },

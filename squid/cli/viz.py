@@ -31,7 +31,7 @@ from fractions import Fraction
 from ..diagnostics.mercier_normalization import (
     mercier_profiles,
     mercier_summary,
-    vmec_half_grid_profile,
+    mercier_interior_profile,
 )
 from ..diagnostics.iota_rationals import _scan_iota_rationals
 
@@ -367,7 +367,7 @@ def plot_mhd_stability(vmec, eq_desc, nfp, s_gate=0.05, output_path=None,
     wout = vmec.wout
     mercier = mercier_profiles(wout)
     dmerc_full = mercier["profiles"]["DMerc"]["flux_normalized"]
-    s_dm, dmerc = vmec_half_grid_profile(dmerc_full)
+    s_dm, dmerc = mercier_interior_profile(dmerc_full)
 
     # ballooning: prefer force-balanced gate data when available
     if gate_ballooning is not None:

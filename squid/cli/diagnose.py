@@ -86,7 +86,7 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path, output_dir="."):
     # ── Priority 2: NEO-RT ──────────────────────────────────────────
     try:
         from simsopt.mhd.boozer import Boozer
-        from squid.utils import nc_to_neor
+        from squid.utils import nc_to_neort
         import subprocess
 
         # Register enough surfaces for stable cubic spline interpolation.
@@ -122,7 +122,7 @@ def _evaluate_effective_ripple(vmec, s_val, nc_file_path, output_dir="."):
         )
         if result is None:
             raise RuntimeError("boozmn → in_file conversion failed")
-        in_file_path, epsmn, pert_m0, pert_mph = resul
+        in_file_path, epsmn, pert_m0, pert_mph = result
 
         # Locate neo_rt.x
         neort_exe = os.environ.get("NEORT_EXECUTABLE", "")
@@ -236,6 +236,15 @@ def _evaluate_effective_ripple_series(vmec, s_vals, nc_file_path, output_dir="."
             "source": source,
         })
     return results
+
+
+def _ripple_groups(results):
+    """Keep dimensionally different diagnostics in separate groups."""
+    groups = {}
+    for item in results or []:
+        if item["value"] is not None and np.isfinite(item["value"]):
+            groups.setdefault(item["source"], []).append(item)
+    return groups
 
 
 def _jsonify(obj):
@@ -574,13 +583,15 @@ def _basic_configuration_summary(
         out["nearest_low_order_iota_distance"] = float(nearest["distance"])
         out["low_order_iota_near_count"] = len(iota_scan.get("near_low_order", []))
         out["low_order_iota_crossing_count"] = len(iota_scan.get("crossings", []))
-    if eps_eff_results:
-        finite = [x for x in eps_eff_results if x.get("value") is not None]
-        if finite:
-            worst = max(finite, key=lambda x: float(x["value"]))
-            out["effective_ripple_or_proxy_worst_s"] = float(worst["s"])
-            out["effective_ripple_or_proxy_worst_value"] = float(worst["value"])
-            out["effective_ripple_or_proxy_source"] = worst["source"]
+    peaks = {source: max(items, key=lambda item: item["value"])
+             for source, items in _ripple_groups(eps_eff_results).items()}
+    if peaks:
+        out["transport_maxima_by_source"] = peaks
+    if len(peaks) == 1:
+        worst = next(iter(peaks.values()))
+        out["effective_ripple_or_proxy_worst_s"] = float(worst["s"])
+        out["effective_ripple_or_proxy_worst_value"] = float(worst["value"])
+        out["effective_ripple_or_proxy_source"] = worst["source"]
     return out
 
 
@@ -717,12 +728,9 @@ def _main_issue_summary(info, ripple_results=None, itg_info=None, ae_info=None):
             f"shallow trapped depth λ_N~{info['maxj_worst_lambda']:.03f}"
         )
 
-    if ripple_results:
-        finite = [item for item in ripple_results
-                  if item["value"] is not None and np.isfinite(item["value"])]
-        if finite:
-            worst = max(finite, key=lambda item: float(item["value"]))
-            notes.append(f"ripple rises outward; worst checked at s={worst['s']:.2f}")
+    for source, items in _ripple_groups(ripple_results).items():
+        peak = max(items, key=lambda item: item["value"])
+        notes.append(f"{source}: largest sampled value at s={peak['s']:.2f}")
 
     if itg_info is not None and len(itg_info.get("per_surface", {})) > 0:
         itg_s, itg_vals = _sorted_surface_dict(itg_info["per_surface"])
@@ -804,27 +812,20 @@ def _plot_axis_geometry_summary(ax_info, mercier_data=None, well_data=None,
         ax.legend(handles, labels, loc="best")
 
     ax = axes[1, 1]
-    if ripple_results:
-        s = np.array([item["s"] for item in ripple_results], dtype=float)
-        y = np.array([
-            np.nan if item["value"] is None else float(item["value"])
-            for item in ripple_results
-        ])
-        ax.plot(s, y, marker="o", lw=1.8, color="tab:green")
-        for idx, item in enumerate(ripple_results):
-            src = item["source"]
-            short = "DESC" if "DESC" in src else (
-                "NEO-RT" if "NEO-RT" in src else (
-                    "proxy" if "proxy" in src else "n/a"
-                )
-            )
-            ax.annotate(short, (s[idx], y[idx]),
-                        textcoords="offset points", xytext=(0, 6),
-                        ha="center", fontsize=8)
-    ax.set_xlabel("s")
-    ax.set_ylabel("Ripple metric")
-    ax.grid(True, alpha=0.3)
-    ax.set_title("Effective ripple / proxy")
+    groups = _ripple_groups(ripple_results)
+    if len(groups) == 1:
+        source, items = next(iter(groups.items()))
+        ax.plot([item["s"] for item in items], [item["value"] for item in items],
+                marker="o", lw=1.8, color="tab:green")
+        ax.set_xlabel("s")
+        ax.set_ylabel(source)
+        ax.grid(True, alpha=0.3)
+    elif groups:
+        ax.axis("off")
+        ax.text(0, 0.95, "\n".join(
+            f"{source}\n" + ", ".join(f"s={i['s']:.2f}: {i['value']:.3g}" for i in items)
+            for source, items in groups.items()), va="top", transform=ax.transAxes)
+    ax.set_title("Transport diagnostics")
 
     fig.suptitle(
         f"Axis and stability summary (L_axis={ax_info['axis_length']:.3f} m)"

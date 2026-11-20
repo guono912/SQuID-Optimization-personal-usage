@@ -305,7 +305,7 @@ def plot_equilibrium_overview(vmec, eq_desc, s_gate=0.05, output_path=None):
     ax.set_xlabel("s"); ax.set_ylabel(r"$\iota$")
     ax.set_xlim(s_gate, 1.0); ax.set_ylim(lo_i, hi_i)
     ax.grid(True, alpha=0.25)
-    ax.set_title(r"Rotational Transform $\iota(s)$  —  nfp=4 coupled rationals labeled")
+    ax.set_title(rf"Rotational Transform $\iota(s)$  —  nfp={nfp} coupled rationals labeled")
 
     # (b) Toroidal current (DESC)
     ax = axes[0, 1]
@@ -802,7 +802,8 @@ def build_scalar_json(nc_file, vmec, eq_desc, info, mercier_facts, well_facts,
         "iota_min": float(np.min(wout.iotaf)),
         "iota_max": float(np.max(wout.iotaf)),
         "iota_span": float(wout.iotaf[-1] - wout.iotaf[0]),
-        "nfp_dangerous_rationals_crossed": crossed,
+        "nfp_harmonics_in_iota_range": crossed,
+        "nfp_dangerous_rationals_crossed": crossed,  # compatibility alias
         "low_order_rational_crossings_q_le_12": rational_scan.get("crossings", []),
         "iota_sign_flip": rational_scan.get("sign_flip", False),
         "iota_zero_crossings": rational_scan.get("zero_crossings", []),

@@ -112,7 +112,8 @@ island.
 - `diagnose.py` field `low_order_iota_crossing_count` and the associated
   `q<=...` table are broad reduced-fraction exposure scans. They are not NFP
   risk rankings.
-- `viz_report.py` field `nfp_dangerous_rationals_crossed` lists nominal
+- `viz_report.py` field `nfp_harmonics_in_iota_range` (legacy alias
+  `nfp_dangerous_rationals_crossed`) lists nominal
   NFP-coupled harmonics within the sampled iota range and `m/k` limits.
   Different harmonic pairs can have the same rational value; the list length
   does not give a count of distinct surfaces.
@@ -142,3 +143,7 @@ Primary references:
 - Stellaris: https://doi.org/10.1016/j.fusengdes.2025.114868
 - Magnetic-gradient coil-distance proxy:
   https://doi.org/10.1088/1361-6587/ad1a3e
+
+VMEC default rational targets cover both signs. Explicit lists use the signs
+you provide. With the hard guard enabled, every hard target is checked,
+including those absent from the soft list.

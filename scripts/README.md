@@ -101,3 +101,8 @@ python scripts/util/nc_to_neort.py --help
 3. Add a thin grouped wrapper under `scripts/<group>/`.
 4. Keep an old flat wrapper if that path already existed.
 5. Add import, `--help`, output-isolation, and numerical tests.
+
+The separate QI refinement command writes its best evaluated equilibrium to
+`wout_refinement_best.nc`. Its `run_status.json` distinguishes improvement
+over the starting score (`improved`) from retaining the baseline
+(`baseline_only`). Either result requires independent physical checks.

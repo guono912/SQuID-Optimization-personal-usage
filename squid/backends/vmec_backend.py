@@ -249,6 +249,12 @@ def _rational_placement_residuals(vmec_ro, args, skip_hard=False):
 
     targets = [_parse_rational(x) for x in targets_raw]
     hard_values = {round(_parse_rational(x)[0], 12) for x in hard_raw}
+    soft_values = {round(val, 12) for val, _ in targets}
+    if getattr(args, "hard_rational_crossing", False):
+        for raw in hard_raw:
+            val, label = _parse_rational(raw)
+            if round(val, 12) not in soft_values and (val, label) not in targets:
+                targets.append((val, label))
     if not targets:
         return np.zeros(1), {
             "nearest_label": "",
@@ -288,7 +294,8 @@ def _rational_placement_residuals(vmec_ro, args, skip_hard=False):
         abs_delta = np.abs(delta)
         idx = int(np.argmin(abs_delta))
         dist = float(abs_delta[idx])
-        residuals.append(max((min_distance - dist) / scale, 0.0))
+        if round(val, 12) in soft_values:
+            residuals.append(max((min_distance - dist) / scale, 0.0))
         signs = np.sign(delta)
         exact = np.any(abs_delta < 1e-10)
         sign_cross = np.any(signs[:-1] * signs[1:] < 0)

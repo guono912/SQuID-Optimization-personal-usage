@@ -244,7 +244,7 @@ def _run_desc(args, wout_tmp):
             _append_history_row(objective=INVALID_TOTAL)
             return INVALID_TOTAL
 
-        # ── 3. Save DESC eq as VMEC wout, run VMEC for SQuID core ──
+        # ── 3. Save DESC eq as VMEC wout, load it read-only for SQuID core ──
         try:
             VMECIO.save(eq, wout_tmp, surfs=args.ns_vmec, verbose=0)
             vmec_ro = Vmec(wout_tmp)

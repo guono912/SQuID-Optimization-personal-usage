@@ -7,7 +7,7 @@ loop (random hill-climbing with DESC force balance) runs inside main();
 it used to execute at module import time.
 """
 
-import os, sys, time, json, tempfile, shutil, csv, argparse
+import os, sys, time, json, shutil, csv, argparse
 import numpy as np
 
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
@@ -64,7 +64,11 @@ def main(argv=None):
     B_ALPHAS = np.linspace(0, np.pi, 6, endpoint=False)
     B_ZETA0 = np.linspace(-0.5*np.pi, 0.5*np.pi, 5)
 
+    if N_ITER < 0 or N_TRIALS < 0:
+        _parser.error("iteration and trial counts must be nonnegative")
     os.makedirs(RUN_DIR, exist_ok=True)
+    if os.listdir(RUN_DIR):
+        _parser.error("choose an empty refinement directory")
 
     # ── Load initial equilibrium ──
     print(f"Loading: {NC_FILE}")
@@ -97,11 +101,11 @@ def main(argv=None):
     x0 = np.concatenate([R0_arr[free_idx_R], Z0_arr[free_idx_Z]])
     n_dof = len(x0)
 
-    wout_tmp = os.path.join(tempfile.gettempdir(), "wout_refine_qi.nc")
+    wout_tmp = os.path.join(RUN_DIR, "wout_trial.nc")
 
     # ── History ──
     history_path = os.path.join(RUN_DIR, "history.csv")
-    with open(history_path, "w", newline="") as fh:
+    with open(history_path, "x", newline="") as fh:
         csv.DictWriter(fh, fieldnames=["iter","trial","f_QI","f_maxJ","f_Bmin",
             "balloon_n","balloon_lam","dmerc_edge_toroidal_flux_wb",
             "dmerc_vmec_raw_min","dmerc_flux_normalized_min","dmerc_neg","fb_rms",
@@ -117,10 +121,14 @@ def main(argv=None):
         # DESC solve
         try:
             constraints = get_fixed_boundary_constraints(eq=eq0, profiles=True, normalize=True)
-            eq0.solve(objective="force", constraints=constraints,
+            _, solve_result = eq0.solve(objective="force", constraints=constraints,
                       optimizer="lsq-exact", maxiter=50, verbose=0)
+            if not solve_result["success"]:
+                return None
             fb_obj = ForceBalance(eq=eq0); fb_obj.build(use_jit=False, verbose=0)
             fb_rms = float(np.sqrt(np.mean(np.asarray(fb_obj.compute(eq0.params_dict))**2)))
+            if not np.isfinite(fb_rms):
+                return None
             if fb_rms > 1e6 and hasattr(evaluate, 'fb_rms0'):
                 return None  # reject
             if not hasattr(evaluate, 'fb_rms0'):
@@ -219,13 +227,24 @@ def main(argv=None):
                    dmerc_neg=dm_neg, fb_rms=fb_rms, delta=delta, beta=beta,
                    iota_ax=iota_ax, iota_ed=iota_ed, well=well, total=total,
                    accept=0, dt=dt)
-        return row, x
+        return (row, x) if np.isfinite(total) else None
 
     # ── Initial evaluation ──
     print("\n=== Initial evaluation ===")
-    res0, x_cur = evaluate(x0, "init")
-    if res0 is None:
-        print("FAILED on initial point!"); sys.exit(1)
+    def finish(state, best=None, candidate=None):
+        status = {"state": state, "accepted": state == "improved",
+                  "best_objective": best, "output_file": candidate}
+        with open(os.path.join(RUN_DIR, "run_status.json"), "w") as fh:
+            json.dump(status, fh, indent=2, allow_nan=False)
+        print(f"Refinement finished: {state}")
+        return 1 if state == "initial_failed" else 0
+
+    initial = evaluate(x0, "init")
+    if initial is None:
+        return finish("initial_failed")
+    res0, x_cur = initial
+    best_path = os.path.join(RUN_DIR, "wout_refinement_best.nc")
+    shutil.copyfile(wout_tmp, best_path)
     evaluate.fb_rms0 = max(res0['fb_rms'], 1.0)
     res0['iter'] = 0; res0['trial'] = 0; res0['accept'] = 1
     print(f"  f_QI={res0['f_QI']:.4e}  f_maxJ={res0['f_maxJ']:.4e}  "
@@ -268,6 +287,7 @@ def main(argv=None):
                   f"total={res['total']:.4e}  ({res['dt']:.1f}s)")
 
             if accept:
+                os.replace(wout_tmp, best_path)
                 best_total = res['total']
                 x_best = result[1].copy()
                 improved = True
@@ -275,24 +295,11 @@ def main(argv=None):
         if not improved:
             print(f"  No improvement this iteration.")
 
-        # Save checkpoint
-        try:
-            new_R = R0_arr.copy(); new_Z = Z0_arr.copy()
-            new_R[free_idx_R] = x_best[:nR]; new_Z[free_idx_Z] = x_best[nR:]
-            surf.R_lmn = new_R; surf.Z_lmn = new_Z
-            constraints = get_fixed_boundary_constraints(eq=eq0, profiles=True, normalize=True)
-            eq0.solve(objective="force", constraints=constraints,
-                      optimizer="lsq-exact", maxiter=50, verbose=0)
-            cp = os.path.join(RUN_DIR, f"wout_desc_iter{it:02d}.nc")
-            VMECIO.save(eq0, cp, surfs=31, verbose=0)
-            print(f"  Checkpoint: {cp}")
-        except Exception as exc:
-            print(f"  Checkpoint FAILED: {exc}")
+        checkpoint = os.path.join(RUN_DIR, f"wout_desc_iter{it:02d}.nc")
+        shutil.copyfile(best_path, checkpoint)
 
-    # Final save
-    cp_final = os.path.join(RUN_DIR, "wout_desc_optimized.nc")
-    shutil.copy(os.path.join(RUN_DIR, f"wout_desc_iter{N_ITER:02d}.nc"), cp_final)
-    print(f"\nDone. Best total={best_total:.4e}. Final: {cp_final}")
+    state = "improved" if best_total < res0["total"] else "baseline_only"
+    return finish(state, float(best_total), os.path.basename(best_path))
 
 if __name__ == "__main__":
     sys.exit(main())

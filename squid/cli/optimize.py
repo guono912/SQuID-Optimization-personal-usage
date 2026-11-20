@@ -31,6 +31,7 @@ import os
 os.environ.setdefault("JAX_PLATFORMS", "cpu")
 
 import argparse
+import re
 import math
 import tempfile
 from difflib import get_close_matches
@@ -270,6 +271,10 @@ def _build_parser(defaults=None):
     parser = argparse.ArgumentParser(
         description="SQuID stellarator optimiser (complete PRX Energy target)"
     )
+    # argparse otherwise treats a signed fraction such as -4/5 as an option.
+    parser._negative_number_matcher = re.compile(
+        parser._negative_number_matcher.pattern + r"|^-\d+/\d+$"
+    )
     parser.add_argument("--input_parameter", type=str, default=defaults.get("input_parameter"),
                         help="JSON parameter file. CLI arguments override file values.")
     parser.add_argument("--mode", choices=sorted(MODE_PRESETS), default=defaults.get("mode", "core"),
@@ -483,10 +488,10 @@ def _build_parser(defaults=None):
     parser.add_argument("--boundary_curvature_ntheta", type=int,
                         default=defaults.get("boundary_curvature_ntheta", 48))
     parser.add_argument("--rational_targets", nargs="+",
-                        default=defaults.get("rational_targets", ["3/4", "4/5", "5/7", "7/9"]),
+                        default=defaults.get("rational_targets", ["3/4", "4/5", "5/7", "7/9", "-3/4", "-4/5", "-5/7", "-7/9"]),
                         help="Low-order iota rationals to avoid, e.g. 3/4 4/5")
     parser.add_argument("--rational_hard_targets", nargs="+",
-                        default=defaults.get("rational_hard_targets", ["4/5"]),
+                        default=defaults.get("rational_hard_targets", ["4/5", "-4/5"]),
                         help="Rationals for which crossings get a hard large residual")
     parser.add_argument("--rational_s_min", type=float,
                         default=defaults.get("rational_s_min", 0.1))

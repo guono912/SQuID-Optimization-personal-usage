@@ -87,7 +87,7 @@ Historical stage configurations and [archived material](artifacts/README.md) rec
 
 ## Tests
 
-Run the fast suite from the checkout. Set `SQUID_TEST_WOUT` to an equilibrium compatible with the installed VMEC stack to include the equilibrium-backed tests.
+Run the fast suite from the checkout in the solver environment described above. Set `SQUID_TEST_WOUT` to an equilibrium compatible with the installed VMEC stack to include the equilibrium-backed tests.
 
 ```bash
 python -m pytest -q

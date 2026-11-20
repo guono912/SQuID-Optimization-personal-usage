@@ -22,6 +22,7 @@ import numpy as np
 from simsopt.mhd import Vmec
 from scipy.optimize import minimize
 
+from ..objectives.iota_topology import iota_window_excess
 from ..objectives.maxj_residual import _evaluate_squid
 from ..objectives.qi_residual import (
     compute_highB_contour_residual,
@@ -494,6 +495,12 @@ def _run_desc(args, wout_tmp):
         # ── 18. Optional hard MHD gates ──
         hard_gate_penalty = 0.0
         hard_gate_reasons = []
+        if args.iota_windows:
+            excess = iota_window_excess(getattr(vmec_ro.wout, "iotaf", []), args.iota_windows)
+            if np.any(excess):
+                violation = float(np.max(excess)) if np.isfinite(excess).all() else 1.0
+                hard_gate_penalty += INVALID_TOTAL * (1 + violation)
+                hard_gate_reasons.append("iota_window")
         if getattr(args, 'hard_gate_mhd', False):
             dmerc_floor = float(getattr(
                 args, 'hard_dmerc_flux_normalized_min', 0.0

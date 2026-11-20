@@ -3,6 +3,23 @@
 import numpy as np
 
 
+def iota_window_excess(iota, windows):
+    """Maximum violation on each closed interval of a piecewise-linear full-grid profile."""
+    profile = np.asarray(iota, dtype=float)
+    if profile.ndim != 1 or profile.size < 2:
+        return np.full(len(windows), np.inf)
+    s = np.linspace(0, 1, profile.size)
+    excess = []
+    for start, end, lower, upper in windows:
+        edges = np.interp([start, end], s, profile)
+        values = np.concatenate((edges, profile[(s > start) & (s < end)]))
+        if np.isfinite(values).all():
+            excess.append(max(0.0, lower - values.min(), values.max() - upper))
+        else:
+            excess.append(np.inf)
+    return np.asarray(excess)
+
+
 def iota_topology_residuals(
     iota,
     *,

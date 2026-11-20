@@ -234,7 +234,7 @@ CONFIG_GROUPS = {
         "hard_dmerc_neg_max",
         "hard_ballooning_n_max", "hard_ballooning_lambda_max",
         "hard_beta_max", "hard_fb_rms_max", "hard_rational_crossing",
-        "hard_coil_proxy_bn_max", "hard_gate_iota_topology",
+        "hard_coil_proxy_bn_max", "hard_gate_iota_topology", "iota_windows",
     },
     "r2": {
         "qi_r2_nphi", "qi_r2_nalpha", "qi_r2_nbj", "qi_r2_mpol",
@@ -487,11 +487,15 @@ def _build_parser(defaults=None):
                         default=defaults.get("boundary_curvature_nphi", 48))
     parser.add_argument("--boundary_curvature_ntheta", type=int,
                         default=defaults.get("boundary_curvature_ntheta", 48))
+    parser.add_argument("--iota_window", dest="iota_windows", nargs=4, type=float,
+                        action="append", default=None,
+                        metavar=("S_MIN", "S_MAX", "IOTA_MIN", "IOTA_MAX"),
+                        help="Require the full-grid iota profile to stay within these inclusive bounds. Repeat for additional radial windows.")
     parser.add_argument("--rational_targets", nargs="+",
-                        default=defaults.get("rational_targets", ["3/4", "4/5", "5/7", "7/9", "-3/4", "-4/5", "-5/7", "-7/9"]),
+                        default=defaults.get("rational_targets", []),
                         help="Low-order iota rationals to avoid, e.g. 3/4 4/5")
     parser.add_argument("--rational_hard_targets", nargs="+",
-                        default=defaults.get("rational_hard_targets", ["4/5", "-4/5"]),
+                        default=defaults.get("rational_hard_targets", []),
                         help="Rationals for which crossings get a hard large residual")
     parser.add_argument("--rational_s_min", type=float,
                         default=defaults.get("rational_s_min", 0.1))
@@ -870,6 +874,19 @@ def main(argv=None):
     parser = _build_parser(defaults)
     args = parser.parse_args(argv)
     _validate_config(config, parser, args)
+    if args.iota_windows is None:
+        args.iota_windows = config.get("iota_windows", [])
+    if not isinstance(args.iota_windows, list):
+        parser.error("iota_windows must be a list of four-number windows")
+    for window in args.iota_windows:
+        if (not isinstance(window, (list, tuple)) or len(window) != 4
+                or not all(type(x) in (int, float) and math.isfinite(x) for x in window)
+                or not 0 <= window[0] <= window[1] <= 1 or window[2] > window[3]):
+            parser.error("expected 0 <= S_MIN <= S_MAX <= 1 and finite IOTA_MIN <= IOTA_MAX")
+    if args.w_rational > 0 and not args.rational_targets:
+        parser.error("--w_rational requires explicit --rational_targets")
+    if args.hard_rational_crossing and not args.rational_hard_targets:
+        parser.error("--hard_rational_crossing requires explicit --rational_hard_targets")
     jax_device = initialize_requested_jax_backend()
     if jax_device is not None:
         print(f"  JAX CUDA device initialized early: {jax_device}")

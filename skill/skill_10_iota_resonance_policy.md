@@ -144,6 +144,14 @@ Primary references:
 - Magnetic-gradient coil-distance proxy:
   https://doi.org/10.1088/1361-6587/ad1a3e
 
-VMEC default rational targets cover both signs. Explicit lists use the signs
-you provide. With the hard guard enabled, every hard target is checked,
-including those absent from the soft list.
+VMEC applies rational avoidance only to the signed soft and hard target lists
+chosen for the campaign. Both lists default to empty. Use the actual NFP,
+iota profile and relevant perturbation spectrum to select targets. An enabled
+guard with no corresponding targets is a configuration error.
+
+Both backends accept `gates.iota_windows`. Each row gives
+`[s_min, s_max, iota_min, iota_max]` and constrains the full-grid iota profile
+throughout that interval, including linearly interpolated endpoints. For
+example, `[[0.8, 0.8, 0.96, 0.99], [0.95, 0.95, 1.01, 1.04]]` brackets a
+positive unit crossing between two surfaces. These illustrative bounds
+locate a resonance. Island formation and width require separate field checks.

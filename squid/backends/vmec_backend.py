@@ -31,7 +31,7 @@ from ..objectives.coil_proxy import coil_proxy_residuals, evaluate_coil_proxy
 from ..objectives.oops_residual import oops_harmonics_residuals
 from ..objectives.pdrot_residual import compute_pdrot_from_vmec
 from ..objectives.penalties import bmin_slope_residuals, hinge_loss
-from ..objectives.iota_topology import iota_topology_residuals
+from ..objectives.iota_topology import iota_topology_residuals, iota_window_excess
 from ..diagnostics.mercier_normalization import (
     MERCIER_CONVENTION_VERSION,
     flux_normalize_mercier,
@@ -266,20 +266,15 @@ def _rational_placement_residuals(vmec_ro, args, skip_hard=False):
 
     iota = np.asarray(vmec_ro.wout.iotaf, dtype=float)
     ns = iota.size
-    if ns < 2:
-        return np.array([np.sqrt(INVALID_OBJECTIVE)]), {
-            "nearest_label": "",
-            "nearest_s": np.nan,
-            "nearest_distance": np.nan,
-            "crossing_count": 0,
-            "hard_crossing_count": 0,
-        }
+    if ns < 2 or not np.all(np.isfinite(iota)):
+        raise ValueError("rational placement requires a finite iota profile")
 
     s_native = np.linspace(0.0, 1.0, ns)
     s_min = float(getattr(args, "rational_s_min", 0.1))
     s_max = float(getattr(args, "rational_s_max", 0.95))
     n_scan = max(int(getattr(args, "rational_scan_ns", 96)), 2)
-    s_scan = np.linspace(s_min, s_max, n_scan)
+    s_scan = np.union1d(np.linspace(s_min, s_max, n_scan),
+                        s_native[(s_native > s_min) & (s_native < s_max)])
     i_scan = np.interp(s_scan, s_native, iota)
 
     min_distance = float(getattr(args, "rational_min_distance", 0.003))
@@ -294,12 +289,13 @@ def _rational_placement_residuals(vmec_ro, args, skip_hard=False):
         abs_delta = np.abs(delta)
         idx = int(np.argmin(abs_delta))
         dist = float(abs_delta[idx])
-        if round(val, 12) in soft_values:
-            residuals.append(max((min_distance - dist) / scale, 0.0))
         signs = np.sign(delta)
         exact = np.any(abs_delta < 1e-10)
         sign_cross = np.any(signs[:-1] * signs[1:] < 0)
         crosses = bool(exact or sign_cross)
+        if round(val, 12) in soft_values:
+            distance = 0.0 if crosses else dist
+            residuals.append(max((min_distance - distance) / scale, 0.0))
         if crosses:
             crossing_count += 1
             if round(val, 12) in hard_values:
@@ -1309,7 +1305,7 @@ def run_vmec(args):
                 except Exception as exc:
                     self._failed_terms.append("Rational placement")
                     print(f"    [SQuID #{self._n}] Rational placement FAILED: {exc}")
-                    self._rational_residuals = np.array([np.sqrt(INVALID_OBJECTIVE)])
+                    self._rational_residuals = self._large_like(self._rational_residuals)
                     self._rational_metrics = {}
 
             # ── pdrot objective (principal-direction rotation rate) ──
@@ -1556,6 +1552,11 @@ def run_vmec(args):
             self._compute()
             return self._iota_monotonic_residuals
 
+        def iota_window_penalty(self):
+            self._compute()
+            excess = iota_window_excess(getattr(vmec.wout, "iotaf", []), args.iota_windows)
+            return np.sqrt(INVALID_OBJECTIVE) * np.where(np.isfinite(excess), excess, 1.0)
+
         def hard_iota_topology_penalty(self):
             self._compute()
             return self._hard_iota_topology_residuals
@@ -1623,7 +1624,13 @@ def run_vmec(args):
 
         def rational_penalty(self):
             self._compute()
+            if args.hard_rational_crossing:
+                return self._rational_residuals[:-1]
             return self._rational_residuals
+
+        def hard_rational_penalty(self):
+            self._compute()
+            return self._rational_residuals[-1:]
 
         def pdrot_penalty(self):
             self._compute()
@@ -1676,6 +1683,7 @@ def run_vmec(args):
     optional = [
         (args.w_mirror, squid.mirror_penalty, "w_mirror"),
         (getattr(args, 'w_beta', 0.0), squid.beta_penalty, "w_beta"),
+        (float(bool(args.iota_windows)), squid.iota_window_penalty, "iota_windows"),
         (args.w_iota, squid.iota_penalty, "w_iota"),
         (getattr(args, "w_iota_profile", 0.0), squid.iota_profile_penalty, "w_iota_profile"),
         (getattr(args, "w_iota_shear", 0.0), squid.iota_shear_penalty, "w_iota_shear"),
@@ -1706,14 +1714,8 @@ def run_vmec(args):
         (getattr(args, 'w_shape_anchor', 0.0), squid.shape_anchor_penalty, "w_shape_anchor"),
         (getattr(args, 'w_boundary_curvature', 0.0), squid.boundary_curvature_penalty, "w_boundary_curvature"),
         (getattr(args, 'w_pdrot', 0.0), squid.pdrot_penalty, "w_pdrot"),
-        (
-            max(
-                getattr(args, 'w_rational', 0.0),
-                1.0 if getattr(args, "hard_rational_crossing", False) else 0.0,
-            ),
-            squid.rational_penalty,
-            "w_rational",
-        ),
+        (args.w_rational, squid.rational_penalty, "w_rational"),
+        (float(args.hard_rational_crossing), squid.hard_rational_penalty, "hard_rational_crossing"),
     ]
     for w, func, name in optional:
         if w > 0:
@@ -1800,6 +1802,8 @@ def run_vmec(args):
                 reasons.append("hard iota topology gate")
             if np.isfinite(args.hard_coil_proxy_bn_max) and np.any(squid._coil_proxy_hard_bn_residual):
                 reasons.append("hard coil Bn gate")
+            if args.iota_windows and np.any(squid.iota_window_penalty()):
+                reasons.append("iota outside requested window")
             if args.hard_rational_crossing and squid._rational_metrics.get("hard_crossing_count", 1):
                 reasons.append("hard rational crossing")
             if reasons:

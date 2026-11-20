@@ -25,6 +25,28 @@ from ..diagnostics.mercier_normalization import (
     mercier_interior_profile,
 )
 
+def validate_settings(settings):
+    fields = {
+        "weights": {"w_qi", "w_maxj", "w_bmin", "w_ar", "w_reg", "w_mirror",
+                    "w_beta", "w_iota", "w_well", "w_mercier_margin",
+                    "w_ballooning", "w_force_balance"},
+        "targets": {"aspect_target", "mirror_target", "beta_target", "iota_ax",
+                    "iota_edge", "iota_tolerance", "mercier_flux_normalized_margin_target",
+                    "target_well", "ballooning_lambda_target", "maxj_target", "bmin_slope_target"},
+    }
+    if not isinstance(settings, dict) or settings.keys() != fields.keys():
+        raise ValueError("refinement config requires weights and targets")
+    for group, keys in fields.items():
+        values = settings[group]
+        if not isinstance(values, dict) or values.keys() != keys:
+            raise ValueError(f"{group} requires exactly: {', '.join(sorted(keys))}")
+        for key, value in values.items():
+            if type(value) not in (int, float) or not np.isfinite(value):
+                raise ValueError(f"{key} must be finite")
+            if group == "weights" and value < 0:
+                raise ValueError(f"{key} must be nonnegative")
+
+
 # ── Config ──
 def main(argv=None):
     _parser = argparse.ArgumentParser(description=__doc__)
@@ -32,6 +54,7 @@ def main(argv=None):
                          help="input equilibrium; required unless SQUID_REFINE_NC_FILE is set")
     _parser.add_argument("--run-dir", default=os.environ.get("SQUID_REFINE_RUN_DIR"),
                          help="new output directory; required unless SQUID_REFINE_RUN_DIR is set")
+    _parser.add_argument("--config", required=True, help="JSON refinement weights and targets")
     _parser.add_argument("--n-trials", type=int, default=6)
     _parser.add_argument("--n-iter", type=int, default=6)
     _args = _parser.parse_args(argv)
@@ -47,16 +70,13 @@ def main(argv=None):
     DOF_FRAC = 0.025    # max fractional change per DoF
     L = 6; M = 6; N = 6
 
-    # Weights (QI-focused, strong MHD gates)
-    W = dict(w_qi=3.0, w_maxj=2.0, w_bmin=1.0, w_ar=80, w_reg=80,
-             w_mirror=5, w_beta=5, w_iota=30, w_well=10,
-             w_mercier_margin=100, w_ballooning=25, w_force_balance=3)
-
-    TGT = dict(aspect_target=10.0, mirror_target=0.30, beta_target=0.022,
-               iota_ax=-0.735, iota_edge=-0.675, iota_tolerance=0.025,
-               # Positive margins require campaign calibration; zero is the sign gate.
-               mercier_flux_normalized_margin_target=0.0, target_well=0.03,
-               ballooning_lambda_target=0.0)
+    try:
+        with open(_args.config) as handle:
+            settings = json.load(handle)
+        validate_settings(settings)
+    except (OSError, ValueError) as exc:
+        _parser.error(str(exc))
+    W, TGT = settings["weights"], settings["targets"]
 
     S_VALS = np.linspace(0.2, 0.8, 4)
     ALPHAS = np.linspace(0, 2*np.pi, 6, endpoint=False)
@@ -69,6 +89,9 @@ def main(argv=None):
     os.makedirs(RUN_DIR, exist_ok=True)
     if os.listdir(RUN_DIR):
         _parser.error("choose an empty refinement directory")
+
+    with open(os.path.join(RUN_DIR, "refinement_settings.json"), "x") as handle:
+        json.dump(settings, handle, indent=2)
 
     # ── Load initial equilibrium ──
     print(f"Loading: {NC_FILE}")
@@ -143,7 +166,7 @@ def main(argv=None):
         try:
             VMECIO.save(eq0, wout_tmp, surfs=31, verbose=0)
             vmec = Vmec(wout_tmp); vmec.run()
-            info = _evaluate_squid(vmec, S_VALS, ALPHAS, 20, -0.06, 8, 8)
+            info = _evaluate_squid(vmec, S_VALS, ALPHAS, 20, TGT["maxj_target"], 8, 8)
         except Exception as exc:
             print(f"  {label} SQuID FAILED: {exc}")
             return None
@@ -161,7 +184,7 @@ def main(argv=None):
                 v = np.asarray(obj.compute(eq0.params_dict), dtype=float).ravel() - 1.0
                 bal_lam = max(bal_lam, float(np.max(v)))
                 bal_n += int(np.sum(v > 0))
-                lam_res.extend(np.maximum(v, 0.0).tolist())
+                lam_res.extend(np.maximum(v - TGT["ballooning_lambda_target"], 0.0).tolist())
             f_bal = float(np.mean(np.array(lam_res)**2))
         except Exception:
             f_bal = 1e4
@@ -191,7 +214,7 @@ def main(argv=None):
         bmin_res = np.zeros(1)
         try:
             from ..objectives.penalties import bmin_slope_residuals
-            bmin_res = bmin_slope_residuals(S_VALS, info["surface_Bmin"], 0.01)
+            bmin_res = bmin_slope_residuals(S_VALS, info["surface_Bmin"], TGT["bmin_slope_target"])
         except: pass
         f_Bmin = float(np.sum(bmin_res**2))
         delta = info["mirror_ratio"]

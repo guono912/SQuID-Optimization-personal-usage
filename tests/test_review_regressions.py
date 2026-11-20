@@ -81,3 +81,16 @@ def test_enabling_avoidance_requires_campaign_targets(flag, capsys):
     with pytest.raises(SystemExit):
         main([flag, "1"] if flag == "--w_rational" else [flag])
     assert "requires explicit" in capsys.readouterr().err
+
+
+def test_mhd_limits_overrides_and_inactive_checks():
+    from squid.evaluation.gates import screening_limits
+
+    limits = screening_limits({"min_well_depth": None, "max_effective_ripple": .2})
+    assert limits["min_well_depth"] is None
+    assert limits["max_negative_mercier_points"] == 0
+    assert limits["max_effective_ripple"] == .2
+    for bad in ({"min_well": .1}, {"max_negative_mercier_points": .5},
+                {"max_effective_ripple": float("nan")}):
+        with pytest.raises(ValueError):
+            screening_limits(bad)

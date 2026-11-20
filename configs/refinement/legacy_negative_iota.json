@@ -1,0 +1,29 @@
+{
+  "weights": {
+    "w_qi": 3.0,
+    "w_maxj": 2.0,
+    "w_bmin": 1.0,
+    "w_ar": 80,
+    "w_reg": 80,
+    "w_mirror": 5,
+    "w_beta": 5,
+    "w_iota": 30,
+    "w_well": 10,
+    "w_mercier_margin": 100,
+    "w_ballooning": 25,
+    "w_force_balance": 3
+  },
+  "targets": {
+    "aspect_target": 10.0,
+    "mirror_target": 0.3,
+    "beta_target": 0.022,
+    "iota_ax": -0.735,
+    "iota_edge": -0.675,
+    "iota_tolerance": 0.025,
+    "mercier_flux_normalized_margin_target": 0.0,
+    "target_well": 0.03,
+    "ballooning_lambda_target": 0.0,
+    "maxj_target": -0.06,
+    "bmin_slope_target": 0.01
+  }
+}

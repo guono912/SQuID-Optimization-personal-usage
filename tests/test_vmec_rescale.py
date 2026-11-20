@@ -35,3 +35,8 @@ def test_rescale_preserves_reduced_modes_pressure_and_signed_flux(tmp_path):
     np.testing.assert_allclose(float(fields["PRES_SCALE"]) *
                                np.polynomial.polynomial.polyval([0, .5, 1], am),
                                [100, 50, 0], atol=1e-10)
+
+    wout_to_input(wout, target, target_rmajor=4)
+    preserved = target.read_text()
+    assert "NFP = 2" in preserved and "CURTOR = 7.000000000000000e+02" in preserved
+    assert "AC(0) = 1.000000000000000e+00" in preserved

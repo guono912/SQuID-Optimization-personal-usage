@@ -10,7 +10,7 @@ Use grouped paths in new documentation. Legacy flat paths remain compatible.
 
 ```bash
 python scripts/opt/optimize.py --input_parameter <config.json>
-python scripts/opt/refine_qi.py --nc-file <wout.nc> --run-dir <run>
+python scripts/opt/refine_qi.py --nc-file <wout.nc> --run-dir <run> --config configs/refinement/legacy_negative_iota.json
 ```
 
 - `optimize.py`: VMEC/DESC optimization, resolved config, history, checkpoints.
@@ -106,3 +106,15 @@ The separate QI refinement command writes its best evaluated equilibrium to
 `wout_refinement_best.nc`. Its `run_status.json` distinguishes improvement
 over the starting score (`improved`) from retaining the baseline
 (`baseline_only`). Either result requires independent physical checks.
+
+Copy the refinement JSON before adjusting weights and targets for another
+campaign. The run records the selected values in `refinement_settings.json`.
+Use the same `--maxj_target` for optimization, diagnosis and visualization
+when comparing scores (default -0.06).
+
+The standalone MHD gate accepts `--limits limits.json`. Omitted keys inherit
+the historical screening values: `max_effective_ripple=0.05`,
+`min_well_depth=0.03`, `max_negative_mercier_points=0`, and
+`max_unstable_ballooning_points=0`. Set a limit to JSON null to disable it.
+Read `evidence_status` and `evidence_issues` for numerical checks, and
+`design_status`, `design_issues` and `screening_limits` for campaign criteria.

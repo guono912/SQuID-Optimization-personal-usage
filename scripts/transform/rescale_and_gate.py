@@ -8,6 +8,7 @@ Usage:
         --output_dir gate_results/
 """
 import argparse
+import json
 import os
 import shutil
 import sys
@@ -32,7 +33,7 @@ def _run_in_directory(path):
         os.chdir(previous)
 
 
-def rescale(wout_src, target_rmajor, output_dir, ns=31):
+def rescale(wout_src, target_rmajor, output_dir, ns=31, *, nfp_out=None, current="preserve"):
     """Rescale wout to new R0 and run VMEC."""
     from simsopt.mhd import Vmec
     from squid.utils.vmec_input import wout_to_input
@@ -42,9 +43,11 @@ def rescale(wout_src, target_rmajor, output_dir, ns=31):
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = f"{Path(wout_src).stem}_R{str(target_rmajor).replace('.', 'p')}"
     input_path = output_dir / f"input.{stem}"
-    # The historical NFP4 transform uses free iota with zero toroidal current.
-    wout_to_input(source, input_path, ns=ns, nfp_out=4,
-                  target_rmajor=target_rmajor, zero_current=True)
+    if current not in ("preserve", "zero") or (nfp_out is not None and nfp_out < 1):
+        raise ValueError("select a positive NFP and current policy preserve or zero")
+    print(f"  Field periods: {nfp_out or 'source'}; current policy: {current}")
+    wout_to_input(source, input_path, ns=ns, nfp_out=nfp_out,
+                  target_rmajor=target_rmajor, zero_current=(current == "zero"))
     with _run_in_directory(output_dir):
         vmec = Vmec(str(input_path))
         vmec.run()
@@ -53,9 +56,9 @@ def rescale(wout_src, target_rmajor, output_dir, ns=31):
     return str(output)
 
 
-def gate(wout_path, output_dir):
+def gate(wout_path, output_dir, limits=None):
     """Run MHD gate on wout."""
-    return mhd_gate(wout_path, output_dir)
+    return mhd_gate(wout_path, output_dir, limits=limits)
 
 
 def main(argv=None):
@@ -64,14 +67,31 @@ def main(argv=None):
     ap.add_argument("--target_rmajor", type=float, required=True)
     ap.add_argument("--output_dir", default="runs/transform_gate_latest")
     ap.add_argument("--ns", type=int, default=31)
+    ap.add_argument("--preset", choices=["nfp4-zero-current"], help="historical four-period transform")
+    ap.add_argument("--limits", help="MHD screening limits JSON")
+    ap.add_argument("--nfp-out", type=int, help="output field periods (default: source NFP)")
+    ap.add_argument("--current", choices=("preserve", "zero"),
+                    help="retain source total current and profile coefficients, or explicitly remove current")
     args = ap.parse_args(argv)
+
+    if args.preset:
+        if args.nfp_out not in (None, 4) or args.current not in (None, "zero"):
+            ap.error("the nfp4-zero-current preset requires NFP=4 and zero current")
+        args.nfp_out, args.current = 4, "zero"
+    limits = None
+    if args.limits:
+        with open(args.limits) as handle:
+            limits = json.load(handle)
+        if not isinstance(limits, dict):
+            ap.error("--limits must contain a JSON object")
 
     print(f"\n=== Rescale: {Path(args.wout).stem} → R0={args.target_rmajor}m ===")
 
-    wout_r2p5 = rescale(args.wout, args.target_rmajor, args.output_dir, ns=args.ns)
+    scaled_wout = rescale(args.wout, args.target_rmajor, args.output_dir, ns=args.ns,
+                           nfp_out=args.nfp_out, current=args.current or "preserve")
 
     import netCDF4
-    ds = netCDF4.Dataset(wout_r2p5, 'r')
+    ds = netCDF4.Dataset(scaled_wout, 'r')
     mercier = mercier_summary(ds, s_min=0.1, s_max=0.97)
     print(f"  Rescale VMEC: β={float(ds.variables['betatotal'][:])*100:.2f}%, "
           f"ι=[{float(ds.variables['iotaf'][0]):.4f},{float(ds.variables['iotaf'][-1]):.4f}], "
@@ -81,7 +101,7 @@ def main(argv=None):
     ds.close()
 
     print(f"\n=== Gate at R0={args.target_rmajor}m ===")
-    report = gate(wout_r2p5, args.output_dir)
+    report = gate(scaled_wout, args.output_dir, limits=limits)
     print(f"  Verdict: {report['verdict']}")
 
 

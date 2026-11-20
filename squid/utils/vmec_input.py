@@ -57,6 +57,8 @@ def wout_to_input(wout_path, input_path, ns=31,
             np.asarray(ds.variables["ac_aux_f"][:], dtype=float)
             if "ac_aux_f" in ds.variables else None
         )
+        if target_rmajor is not None and free_iota and not zero_current and "ctor" not in ds.variables:
+            raise ValueError("cannot preserve current without wout.ctor")
         source_ctor = (
             float(np.asarray(ds.variables["ctor"][:]).squeeze())
             if "ctor" in ds.variables else 0.0
@@ -81,6 +83,15 @@ def wout_to_input(wout_path, input_path, ns=31,
         )
         current_aux = list(zip(ac_aux_s[valid], ac_aux_f[valid]))
 
+    if target_rmajor is not None and free_iota and not zero_current:
+        if not np.isfinite(source_ctor):
+            raise ValueError("source total current is non-finite")
+        # VMEC reports the integrated current in amperes; zero-current solves
+        # can retain a sub-nanoampere roundoff residual.
+        if abs(source_ctor) > 1e-8 and len(current_aux) < 2 and not (
+            ac is not None and np.all(np.isfinite(ac)) and np.any(ac != 0)
+        ):
+            raise ValueError("cannot preserve nonzero current without its source profile")
     s_full = np.linspace(0, 1, ns_w)
 
     # Clamp negative edge pressure (polynomial fitting artifact)

@@ -259,7 +259,7 @@ def _run_desc(args, wout_tmp):
         try:
             info = _evaluate_squid(
                 vmec_ro, s_vals, alphas,
-                args.num_pitch, T_J=-0.06, mboz=args.mboz, nboz=args.nboz,
+                args.num_pitch, T_J=args.maxj_target, mboz=args.mboz, nboz=args.nboz,
             )
             if not info.get("common_B_valid", True):
                 failure_reasons.append("common B range")

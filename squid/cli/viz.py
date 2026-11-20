@@ -856,7 +856,7 @@ def build_scalar_json(nc_file, vmec, eq_desc, info, mercier_facts, well_facts,
 # Main
 # ═══════════════════════════════════════════════════════════════════
 
-def generate_report(nc_file, output_dir="viz", nfp=4, gate_json=None):
+def generate_report(nc_file, output_dir="viz", nfp=4, gate_json=None, maxj_target=-0.06):
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     s_gate = 0.10
@@ -892,7 +892,7 @@ def generate_report(nc_file, output_dir="viz", nfp=4, gate_json=None):
     from ..evaluation.evaluate import evaluate_squid_detailed
     info = evaluate_squid_detailed(
         vmec, s_vals=np.linspace(0.15, 0.85, 7),
-        num_alpha=8, num_pitch=50, verbose=False,
+        num_alpha=8, num_pitch=50, T_J=maxj_target, verbose=False,
     )
     print(f"  f_QI={info['f_QI']:.4e}  f_maxJ={info['f_maxJ']:.4e}  "
           f"f_Bmin={info['f_Bmin']:.4e}")
@@ -969,6 +969,7 @@ def generate_report(nc_file, output_dir="viz", nfp=4, gate_json=None):
     scalar = build_scalar_json(nc_file, vmec, eq_desc, info, mercier_facts, well_facts,
                                ballooning_facts, eps_eff,
                                itg_proxy=itg_proxy, s_gate=s_gate)
+    scalar["maxj_target"] = maxj_target
     json_path = output_dir / "scalar_summary.json"
     with open(json_path, "w") as f:
         json.dump(scalar, f, indent=2, default=lambda x: None if (isinstance(x, float) and np.isnan(x)) else str(x))
@@ -1007,10 +1008,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--nc_file", required=True)
     parser.add_argument("--output_dir", default="runs/viz_latest")
+    parser.add_argument("--maxj_target", type=float, default=-0.06)
     parser.add_argument("--nfp", type=int, default=4)
     parser.add_argument("--gate_json", type=str, default=None,
                         help="DESC force-balanced gate JSON for accurate ballooning data")
     args = parser.parse_args(argv)
     generate_report(args.nc_file, output_dir=args.output_dir, nfp=args.nfp,
-                    gate_json=args.gate_json)
+                    gate_json=args.gate_json, maxj_target=args.maxj_target)
     return 0

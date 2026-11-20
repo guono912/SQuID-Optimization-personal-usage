@@ -74,7 +74,9 @@ def _compute_effective_ripple(eq, s_vals=None):
             obj = EffectiveRipple(eq, grid=grid, num_transit=10, num_pitch=31)
             obj.build(verbose=0)
             eps = float(obj.compute(eq.params_dict)[0])
-            results[f"s={s:.1f}"] = eps if np.isfinite(eps) else None
+            if not np.isfinite(eps):
+                raise ValueError("effective ripple is non-finite")
+            results[f"s={s:.1f}"] = eps
         except Exception as exc:
             results[f"s={s:.1f}"] = None
             failed_surfaces.append({"s": float(s), "error": repr(exc)})
@@ -90,9 +92,37 @@ def _compute_effective_ripple(eq, s_vals=None):
     }
 
 
+LEGACY_SCREENING_LIMITS = {
+    "max_negative_mercier_points": 0,
+    "max_unstable_ballooning_points": 0,
+    "max_effective_ripple": 0.05,
+    "min_well_depth": 0.03,
+}
+
+
+def screening_limits(overrides):
+    if overrides is None:
+        overrides = {}
+    if not isinstance(overrides, dict) or set(overrides) - LEGACY_SCREENING_LIMITS.keys():
+        raise ValueError("unknown MHD screening limits or invalid limits object")
+    limits = {**LEGACY_SCREENING_LIMITS, **overrides}
+    for key, value in limits.items():
+        if value is None:
+            continue  # This design has no requirement for this metric.
+        if type(value) not in (int, float) or not np.isfinite(value):
+            raise ValueError(f"{key} must be finite or null")
+        if key.startswith("max_") and value < 0:
+            raise ValueError(f"{key} must be nonnegative")
+        if key.endswith("_points") and type(value) is not int:
+            raise ValueError(f"{key} must be an integer")
+    return limits
+
+
 def gate(wout_path, output_dir="runs/mhd_gate_latest", L=6, M=6, N=6,
-         rho_v=None, alpha_v=None, protocol=None):
+         rho_v=None, alpha_v=None, protocol=None, limits=None):
     """Run full MHD gate on a VMEC wout file."""
+    policy = "legacy_screening" if limits is None else "custom"
+    limits = screening_limits(limits)
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = Path(wout_path).stem
@@ -134,7 +164,8 @@ def gate(wout_path, output_dir="runs/mhd_gate_latest", L=6, M=6, N=6,
 
     # Well
     vp = np.array(ds.variables["vp"][:])
-    vmec_info["well_depth"] = float((vp[1] - vp[-1]) / max(abs(vp[1]), 1e-30))
+    vmec_info["well_depth"] = (float((vp[1] - vp[-1]) / abs(vp[1]))
+                               if abs(vp[1]) > 1e-30 else float("nan"))
 
     ds.close()
     print(f"  VMEC: ier={vmec_info['ier_flag']}, β={vmec_info['betatotal']*100:.2f}%, "
@@ -158,7 +189,7 @@ def gate(wout_path, output_dir="runs/mhd_gate_latest", L=6, M=6, N=6,
     fb_rms_init = float(np.sqrt(np.mean(fb_init**2)))
 
     # Solve
-    eq.solve(objective="force",
+    _, solve_result = eq.solve(objective="force",
              constraints=get_fixed_boundary_constraints(eq=eq, profiles=True, normalize=True),
              optimizer="lsq-exact", maxiter=100, verbose=0)
 
@@ -189,40 +220,55 @@ def gate(wout_path, output_dir="runs/mhd_gate_latest", L=6, M=6, N=6,
     print(f"\n  Effective ripple...")
     ripple_info = _compute_effective_ripple(eq)
     peak = ripple_info["peak"]
-    print(f"    ε_eff peak: {peak:.4f}" if peak else "    ε_eff: FAILED")
+    print(f"    ε_eff peak: {peak:.4f}" if peak is not None else "    ε_eff: FAILED")
     print(f"    ({ripple_info['elapsed_s']:.0f}s)")
 
     # ── Gate verdict ──
-    issues = []
+    evidence_issues = []
+    in_interval = (mercier["s"] >= mercier["s_min"]) & (mercier["s"] <= mercier["s_max"])
+    if mercier["sample_count"] < np.count_nonzero(in_interval):
+        evidence_issues.append("Mercier interval contains missing samples")
     if vmec_info["ier_flag"] != 0:
-        issues.append(f"VMEC ier_flag={vmec_info['ier_flag']}")
+        evidence_issues.append(f"VMEC ier_flag={vmec_info['ier_flag']}")
     for name in ("fsqr", "fsqz"):
         if vmec_info[name] is None:
-            issues.append(f"VMEC {name} is unavailable in this wout")
+            evidence_issues.append(f"VMEC {name} is unavailable in this wout")
         elif not np.isfinite(vmec_info[name]):
-            issues.append(f"VMEC {name} is non-finite")
+            evidence_issues.append(f"VMEC {name} is non-finite")
     if not np.isfinite(fb_rms_final):
-        issues.append("DESC force-balance residual is non-finite")
+        evidence_issues.append("DESC force-balance residual is non-finite")
     if (np.isfinite(fb_rms_init) and np.isfinite(fb_rms_final)
             and fb_rms_final > fb_rms_init * (1 + 1e-6)):
-        issues.append(
+        evidence_issues.append(
             f"DESC force-balance worsened: {fb_rms_init:.3e} -> {fb_rms_final:.3e}"
         )
-    if vmec_info["dmerc_negative_count"] > 0:
-        issues.append(f"DMerc has {vmec_info['dmerc_negative_count']} negative points")
-    if bal_info["n_unstable"] > 10:
-        issues.append(f"Ballooning: {bal_info['n_unstable']} unstable points")
-    elif bal_info["n_unstable"] > 0:
-        issues.append(f"Ballooning: {bal_info['n_unstable']} unstable (marginal)")
-    if peak and peak > 0.05:
-        issues.append(f"ε_eff peak {peak:.3f} > 0.05")
-    if ripple_info["failed"]:
-        issues.append(
-            f"Effective ripple failed on {len(ripple_info['failed_surfaces'])} surfaces"
-        )
-    if vmec_info["well_depth"] < 0.03:
-        issues.append(f"Well depth {vmec_info['well_depth']*100:.1f}% < 3%")
+    if not solve_result["success"]:
+        evidence_issues.append(f"DESC force balance: {solve_result['message']}")
+    if not np.isfinite(fb_rms_init):
+        evidence_issues.append("Initial DESC force-balance residual is non-finite")
+    if not np.isfinite(lam_grid).all():
+        evidence_issues.append("Ballooning grid contains non-finite values")
+    if not np.isfinite(vmec_info["well_depth"]):
+        evidence_issues.append("Well depth is unavailable")
+    if ripple_info["failed"] or peak is None:
+        evidence_issues.append("Effective ripple evidence is incomplete")
 
+    design_issues = []
+    checks = [
+        ("max_negative_mercier_points", vmec_info["dmerc_negative_count"], "negative Mercier points"),
+        ("max_unstable_ballooning_points", bal_info["n_unstable"], "unstable ballooning points"),
+        ("max_effective_ripple", peak, "effective ripple peak"),
+        ("min_well_depth", vmec_info["well_depth"], "well depth"),
+    ]
+    for key, value, label in checks:
+        limit = limits[key]
+        if limit is None or value is None or not np.isfinite(value):
+            continue
+        if key.startswith("max_") and value > limit:
+            design_issues.append(f"{label}: {value:g} > {limit:g}")
+        elif key.startswith("min_") and value < limit:
+            design_issues.append(f"{label}: {value:g} < {limit:g}")
+    issues = evidence_issues + design_issues
     verdict = "PASS" if not issues else "WARN"
     print(f"\n  Gate: {verdict}")
     for issue in issues:
@@ -234,6 +280,15 @@ def gate(wout_path, output_dir="runs/mhd_gate_latest", L=6, M=6, N=6,
         "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
         "verdict": verdict,
         "issues": issues,
+        "evidence_issues": evidence_issues,
+        "design_issues": design_issues,
+        "evidence_status": "CHECK" if evidence_issues else "OK",
+        "design_status": ("OUTSIDE_LIMITS" if design_issues else
+                          "UNDETERMINED" if evidence_issues else
+                          "WITHIN_LIMITS" if any(v is not None for v in limits.values())
+                          else "NO_LIMITS"),
+        "screening_policy": policy,
+        "screening_limits": limits,
         "vmec": vmec_info,
         "desc": {
             "L": L, "M": M, "N": N,

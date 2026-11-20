@@ -29,6 +29,7 @@ def build_parser():
                     help="Previous gate JSON to compare against")
     ap.add_argument("--extended-edge", action="store_true",
                     help="Use R2.35 extended edge protocol: rho includes 0.975/0.99 and 12 alpha.")
+    ap.add_argument("--limits", help="JSON file overriding the legacy screening limits (null disables a limit)")
     return ap
 
 
@@ -45,9 +46,15 @@ def main(argv=None):
         alpha_v = np.linspace(0, np.pi, 12, endpoint=False)
         protocol = "extended_edge_rho_0p975_0p99_alpha12"
 
+    limits = None
+    if args.limits:
+        with open(args.limits) as handle:
+            limits = json.load(handle)
+        if not isinstance(limits, dict):
+            ap.error("--limits must contain a JSON object")
     report = gate(
         args.wout, args.output_dir, L=args.L, M=args.M, N=args.N,
-        rho_v=rho_v, alpha_v=alpha_v, protocol=protocol)
+        rho_v=rho_v, alpha_v=alpha_v, protocol=protocol, limits=limits)
 
     if args.compare and os.path.exists(args.compare):
         with open(args.compare) as f:

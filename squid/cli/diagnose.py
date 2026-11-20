@@ -703,6 +703,7 @@ def _compact_diagnostic_report(
         "settings": {
             "num_alpha": args.num_alpha,
             "num_pitch": args.num_pitch,
+            "maxj_target": args.maxj_target,
             "num_surfaces": args.num_surfaces,
             "surfaces": [float(x) for x in np.asarray(s_vals, dtype=float)],
             "qi_r2": bool(args.qi_r2),
@@ -841,6 +842,7 @@ def main():
     parser.add_argument("--nc_file", type=str, required=True,
                         help="VMEC wout .nc file to evaluate")
     parser.add_argument("--num_alpha", type=int, default=8)
+    parser.add_argument("--maxj_target", type=float, default=-0.06)
     parser.add_argument("--num_pitch", type=int, default=50)
     parser.add_argument("--num_surfaces", type=int, default=5)
     parser.add_argument("--s_center", type=float, default=0.5)
@@ -941,7 +943,7 @@ def main():
     info = evaluate_squid_detailed(
         vmec, s_vals=s_vals,
         num_alpha=args.num_alpha,
-        num_pitch=args.num_pitch,
+        num_pitch=args.num_pitch, T_J=args.maxj_target,
         verbose=False,
     )
 

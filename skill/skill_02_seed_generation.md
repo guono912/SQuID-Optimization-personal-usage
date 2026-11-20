@@ -78,11 +78,11 @@ This seed writer reads simple AM and AC assignments. Indexed or multiline
 coefficients, auxiliary spline knots and prescribed-iota coefficients require
 separate verification. Use the original input when profile fidelity matters.
 
-The separate `scripts/transform/rescale_and_gate.py` workflow constructs a
-four-period, free-iota, zero-current equilibrium at the requested major
-radius. It fits pressure and scales edge flux with the square of the length
-ratio. Record the changes to field period and current when comparing it with
-its parent.
+The rescaling command retains the source NFP and reconstructs free iota
+using the source total current and profile coefficients by default. It fits
+pressure and scales edge flux with the square of the length ratio. Review
+the rebuilt operating point. To reproduce the historical four-period,
+zero-current transform, pass `--preset nfp4-zero-current`.
 
 ## Analytic and near-axis seeds
 

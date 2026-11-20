@@ -199,7 +199,7 @@ CONFIG_GROUPS = {
         "iota_shear_absmin", "iota_shear_scale", "iota_monotonic_scale",
         "hard_iota_profile_max_dev", "hard_iota_shear_absmin",
         "hard_iota_monotonic_violation_max",
-        "bmin_slope_target",
+        "bmin_slope_target", "maxj_target",
         "grad_s_smin", "grad_s_smax", "grad_s_ns", "itg_method",
         "mercier_s_min", "mercier_s_max",
         "mercier_flux_normalized_margin_target",
@@ -426,6 +426,8 @@ def _build_parser(defaults=None):
                         default=defaults.get("hard_iota_monotonic_violation_max", 0))
     parser.add_argument("--target_well", type=float, default=defaults.get("target_well", 0.01),
                         help="Target magnetic well depth (only used when w_well > 0)")
+    parser.add_argument("--maxj_target", type=float, default=defaults.get("maxj_target", -0.06),
+                        help="Normalized radial J derivative threshold for the core maximum-J residual")
     parser.add_argument("--bmin_slope_target", type=float, default=defaults.get("bmin_slope_target", 0.01),
                         help="Minimum target for normalised outward B_min growth")
     parser.add_argument("--mercier_s_min", type=float, default=defaults.get("mercier_s_min", 0.1),
@@ -874,6 +876,8 @@ def main(argv=None):
     parser = _build_parser(defaults)
     args = parser.parse_args(argv)
     _validate_config(config, parser, args)
+    if type(args.maxj_target) not in (int, float) or not math.isfinite(args.maxj_target):
+        parser.error("maxj_target must be finite")
     if args.iota_windows is None:
         args.iota_windows = config.get("iota_windows", [])
     if not isinstance(args.iota_windows, list):

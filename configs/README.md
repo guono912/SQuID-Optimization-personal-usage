@@ -30,3 +30,7 @@ as `weights.w_qi` and `r2.nphi` are supported.
 
 The optimizer writes the effective values to
 `<run_dir>/input_parameter.resolved.json`. Preserve that file with the run.
+
+The [historical QI refinement settings](refinement/legacy_negative_iota.json)
+are for the standalone refinement command. Copy that file to select the
+weights and targets for a different operating point.
